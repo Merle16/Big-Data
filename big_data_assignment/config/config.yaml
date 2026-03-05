@@ -19,29 +19,36 @@ features:
 
 model:
   type: "logistic_regression"  # options: logistic_regression, xgboost, baseline
+  # Grid search: use a list of values for any setting; all combinations are tried when grid_search.enabled is true.
+  # Single value or list of one = no grid (use first value). Example: C: [0.1, 1.0, 10.0]
   logistic_regression:
-    C: 1.0
-    penalty: "l2"
-    max_iter: 1000
+    C: [0.1, 1.0, 10.0]
+    penalty: ["l2"]
+    max_iter: [1000]
   xgboost:
-    n_estimators: 300
-    max_depth: 6
-    learning_rate: 0.1
-    subsample: 0.8
-    colsample_bytree: 0.8
+    n_estimators: [300]
+    max_depth: [4, 6, 8]
+    learning_rate: [0.05, 0.1]
+    subsample: [0.8]
+    colsample_bytree: [0.8]
   baseline:
-    model_type: "linear_svm"  # options could be linear_svm, random_forest
-    C: 1.0
+    model_type: ["linear_svm"]
+    C: [0.1, 1.0, 10.0]
+    n_estimators: [100]
+    max_depth: [10]
 
 training:
   validation_size: 0.2
   random_seed: 42
   n_jobs: -1
+  grid_search:
+    enabled: false  # set true to run over all combinations of list values in model.<type>
 
 paths:
   models_dir: "models"
   artifacts_dir: "artifacts"
   logs_dir: "logs"
+  submissions_dir: "submissions"
 
 json_conversion:
   input_dir: "data/raw/json"
