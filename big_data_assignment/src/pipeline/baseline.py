@@ -13,7 +13,10 @@ from sklearn.model_selection import train_test_split
 from src.data.dataloaders import load_train_data, load_validation_data
 from src.models import baseline_model, logistic_regression, xgboost_model
 from src.utils.config import load_config, resolve_path_from_config
-from src.utils.grid_search import expand_model_grid
+from src.utils.grid_search import expand_model_grid, flatten_model_params
+
+# After run_baselines(), the best model (by validation accuracy) is stored here for make_submission().
+_best_baseline: Dict[str, Any] | None = None
 
 
 def _get_director_writer_tokens(csv_dir: str) -> Tuple[pd.Series | None, pd.Series | None]:
@@ -173,9 +176,12 @@ def run_baselines() -> None:
     model_type = config.get("model", {}).get("type", "logistic_regression")
 
     if grid_enabled:
-        # Run grid search for the selected model type only
+        # Run grid search for the selected model type only; store best for make_submission()
+        global _best_baseline
         best_acc = -1.0
         best_params = None
+        best_model = None
+        grid_results = []
         n = 0
         for flat_config in expand_model_grid(config):
             n += 1
@@ -185,90 +191,112 @@ def run_baselines() -> None:
             model = module.train(X_train_vec, y_train, X_val_vec, y_val, flat_config)
             y_val_pred = module.predict(model, X_val_vec)
             acc = accuracy_score(y_val, y_val_pred)
+            grid_results.append((params, acc))
             print(f"  Validation accuracy: {acc:.4f}\n")
             if acc > best_acc:
                 best_acc = acc
                 best_params = params
-        print(f"Grid search done ({n} points). Best: {best_params} -> accuracy {best_acc:.4f}")
+                best_model = model
+        print("Summary (all grid configs -> validation accuracy):")
+        for i, (params, acc) in enumerate(grid_results, 1):
+            print(f"  {i}. {params} -> {acc:.4f}")
+        print(f"Best: {best_params} -> accuracy {best_acc:.4f}")
+        _best_baseline = {
+            "model_type": model_type,
+            "model": best_model,
+            "vectorizer": vectorizer,
+            "config": config,
+        }
         return
 
-    # Single run: all three models (lists in config use first value)
+    # Single run: all three models (lists in config use first value); store best for make_submission()
+    global _best_baseline
     results = {}
+    summary_configs = {}
+    best_acc = -1.0
+    best_name = None
+    best_model = None
     for name, module in models.items():
+        params = config.get("model", {}).get(name, {})
+        flat_params = flatten_model_params(params) if isinstance(params, dict) else {}
+        summary_configs[name] = flat_params
         print(f"Training {name}...")
         model = module.train(X_train_vec, y_train, X_val_vec, y_val, config)
         y_val_pred = module.predict(model, X_val_vec)
         acc = accuracy_score(y_val, y_val_pred)
         results[name] = acc
-        print(f"Validation accuracy ({name}): {acc:.4f}\n")
+        print(f"  config: {flat_params}")
+        print(f"  Validation accuracy ({name}): {acc:.4f}\n")
+        if acc > best_acc:
+            best_acc = acc
+            best_name = name
+            best_model = model
 
-    print("Summary:", results)
+    print("Summary (model -> config -> validation accuracy):")
+    for name in results:
+        print(f"  {name}: {summary_configs[name]} -> {results[name]:.4f}")
+    print(f"Best model for submission: {best_name} (validation accuracy {best_acc:.4f})")
+    _best_baseline = {
+        "model_type": best_name,
+        "model": best_model,
+        "vectorizer": vectorizer,
+        "config": config,
+    }
 
 
 def make_submission() -> str:
     """
-    Generate submission files for the course server.
+    Generate submission files using the **best model from the last run_baselines()** call.
 
-    - Loads training data from data/raw/csv (train-*.csv + movie_directors/movie_writers).
+    You must call run_baselines() first. make_submission() then uses the model that had
+    the highest validation accuracy (and the same vectorizer) to predict on
+    validation_hidden.csv and test_hidden.csv.
+
     - Loads validation_hidden.csv and test_hidden.csv from data/raw/csv.
-    - Trains the model specified in config (model.type: logistic_regression, xgboost, or baseline).
-    - Writes two text files in the `submissions/` folder with model name and timestamp in the filename:
+    - Writes two text files in the `submissions/` folder with model name and timestamp:
       - validation_predictions_<model_type>_<YYYY-MM-DD_HH-MM-SS>.txt
       - test_predictions_<model_type>_<YYYY-MM-DD_HH-MM-SS>.txt
-    Each line is the string "True" or "False" for the corresponding row in the hidden CSV.
+    Each line is "True" or "False".
 
     Returns the path to the submissions directory.
+
+    Raises
+    ------
+    RuntimeError
+        If run_baselines() has not been called yet (no best model stored).
     """
-    config = load_config()
-
-    # Load training data (same as run_baselines)
-    try:
-        X_train, X_val, y_train, y_val = _load_train_val_from_raw_chunks(config)
-    except Exception as e:
+    global _best_baseline
+    if _best_baseline is None:
         raise RuntimeError(
-            "make_submission() requires data/raw/csv with train-*.csv and hidden files. "
-            f"Raw chunk loading failed: {e}"
-        ) from e
+            "No best model stored. Call run_baselines() first, then make_submission()."
+        )
 
-    # Combine train + val for final model
-    X_full = pd.concat([X_train, X_val], ignore_index=True)
-    y_full = pd.concat([y_train, y_val], ignore_index=True)
+    config = _best_baseline["config"]
+    model_type = _best_baseline["model_type"]
+    model = _best_baseline["model"]
+    vectorizer = _best_baseline["vectorizer"]
 
-    # Load hidden sets (same enrichment as train)
+    # Load hidden sets and transform with the same vectorizer used at training time
     X_val_hidden = _load_hidden_from_raw_chunks(config, "validation_hidden_file")
     X_test_hidden = _load_hidden_from_raw_chunks(config, "test_hidden_file")
-
-    # Vectorize
-    vectorizer = CountVectorizer(max_features=5000)
-    X_full_vec = vectorizer.fit_transform(X_full.astype(str))
     X_val_hidden_vec = vectorizer.transform(X_val_hidden.astype(str))
     X_test_hidden_vec = vectorizer.transform(X_test_hidden.astype(str))
 
-    # Train the model type from config
-    model_type = config.get("model", {}).get("type", "logistic_regression")
-    if model_type == "logistic_regression":
-        module = logistic_regression
-    elif model_type == "xgboost":
-        module = xgboost_model
-    elif model_type == "baseline":
-        module = baseline_model
-    else:
-        raise ValueError(f"Unknown model type: {model_type}")
-
-    model = module.train(X_full_vec, y_full, X_full_vec[:1], y_full[:1], config)
-
-    # Predict
+    # Predict with the best model
+    module = {
+        "logistic_regression": logistic_regression,
+        "xgboost": xgboost_model,
+        "baseline": baseline_model,
+    }[model_type]
     y_val_pred = module.predict(model, X_val_hidden_vec)
     y_test_pred = module.predict(model, X_test_hidden_vec)
 
-    # Map to "True" / "False" strings (course requirement)
     def to_submission_line(b: Any) -> str:
         return "True" if b else "False"
 
     val_lines = [to_submission_line(b) for b in y_val_pred]
     test_lines = [to_submission_line(b) for b in y_test_pred]
 
-    # Output files: submissions/ with model type + timestamp in filenames
     base_submissions = resolve_path_from_config(config, "paths", "submissions_dir")
     os.makedirs(base_submissions, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -279,7 +307,7 @@ def make_submission() -> str:
     with open(test_path, "w", encoding="utf-8") as f:
         f.write("\n".join(test_lines) + "\n")
 
-    print(f"Submission written to: {base_submissions}")
+    print(f"Submission written to: {base_submissions} (best model: {model_type})")
     print(f"  - {val_path} ({len(val_lines)} lines)")
     print(f"  - {test_path} ({len(test_lines)} lines)")
     return base_submissions
