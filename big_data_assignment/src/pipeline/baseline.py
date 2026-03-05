@@ -5,8 +5,8 @@ import os
 from datetime import datetime
 from typing import Any, Dict, Tuple
 
+import numpy as np
 import pandas as pd
-from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 
@@ -17,6 +17,11 @@ from src.utils.grid_search import expand_model_grid, flatten_model_params
 
 # After run_baselines(), the best model (by validation accuracy) is stored here for make_submission().
 _best_baseline: Dict[str, Any] | None = None
+
+
+def _text_to_matrix(X) -> np.ndarray:
+    """Convert text series to a numeric matrix (no BoW/TF-IDF). Uses a single length feature per sample."""
+    return np.array([[len(str(s))] for s in X], dtype=np.float64)
 
 
 def _get_director_writer_tokens(csv_dir: str) -> Tuple[pd.Series | None, pd.Series | None]:
@@ -141,13 +146,13 @@ def run_baselines() -> None:
     Simple shared baseline:
     - prefers using raw CSV chunks in data/raw/csv (train-*.csv + movie_* files)
     - falls back to the original config-based CSVs if those are not present
-    - builds a basic bag-of-words representation
-    - trains/evaluates logistic regression, XGBoost and a baseline model.
+    - trains/evaluates logistic regression, XGBoost and a baseline model (no BoW/TF-IDF preprocessing).
 
     If config has training.grid_search.enabled: true, runs grid search over
     the current model type only (model.type) using list values in config;
     reports best params and accuracy. Otherwise uses first value of any list.
     """
+    global _best_baseline
     config = load_config()
 
     try:
@@ -162,9 +167,9 @@ def run_baselines() -> None:
         X_train, y_train = load_train_data(config)
         X_val, y_val = load_validation_data(config)
 
-    vectorizer = CountVectorizer(max_features=5000)
-    X_train_vec = vectorizer.fit_transform(X_train.astype(str))
-    X_val_vec = vectorizer.transform(X_val.astype(str))
+    # No BoW/TF-IDF: convert text to a minimal numeric matrix for the classifiers
+    X_train_vec = _text_to_matrix(X_train)
+    X_val_vec = _text_to_matrix(X_val)
 
     models = {
         "logistic_regression": logistic_regression,
@@ -177,7 +182,6 @@ def run_baselines() -> None:
 
     if grid_enabled:
         # Run grid search for the selected model type only; store best for make_submission()
-        global _best_baseline
         best_acc = -1.0
         best_params = None
         best_model = None
@@ -204,13 +208,12 @@ def run_baselines() -> None:
         _best_baseline = {
             "model_type": model_type,
             "model": best_model,
-            "vectorizer": vectorizer,
+            "transform": _text_to_matrix,
             "config": config,
         }
         return
 
     # Single run: all three models (lists in config use first value); store best for make_submission()
-    global _best_baseline
     results = {}
     summary_configs = {}
     best_acc = -1.0
@@ -239,7 +242,7 @@ def run_baselines() -> None:
     _best_baseline = {
         "model_type": best_name,
         "model": best_model,
-        "vectorizer": vectorizer,
+        "transform": _text_to_matrix,
         "config": config,
     }
 
@@ -249,7 +252,7 @@ def make_submission() -> str:
     Generate submission files using the **best model from the last run_baselines()** call.
 
     You must call run_baselines() first. make_submission() then uses the model that had
-    the highest validation accuracy (and the same vectorizer) to predict on
+    the highest validation accuracy (and the same feature transform) to predict on
     validation_hidden.csv and test_hidden.csv.
 
     - Loads validation_hidden.csv and test_hidden.csv from data/raw/csv.
@@ -274,13 +277,13 @@ def make_submission() -> str:
     config = _best_baseline["config"]
     model_type = _best_baseline["model_type"]
     model = _best_baseline["model"]
-    vectorizer = _best_baseline["vectorizer"]
+    transform = _best_baseline["transform"]
 
-    # Load hidden sets and transform with the same vectorizer used at training time
+    # Load hidden sets and convert to same numeric representation as at training time
     X_val_hidden = _load_hidden_from_raw_chunks(config, "validation_hidden_file")
     X_test_hidden = _load_hidden_from_raw_chunks(config, "test_hidden_file")
-    X_val_hidden_vec = vectorizer.transform(X_val_hidden.astype(str))
-    X_test_hidden_vec = vectorizer.transform(X_test_hidden.astype(str))
+    X_val_hidden_vec = transform(X_val_hidden)
+    X_test_hidden_vec = transform(X_test_hidden)
 
     # Predict with the best model
     module = {

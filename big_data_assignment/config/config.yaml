@@ -10,8 +10,7 @@ data:
   label_column: "label"
 
 features:
-  vectorizer: "tfidf"
-  ngram_range: [1, 2]
+  # No BoW/TF-IDF in baseline pipeline; kept for optional use elsewhere.
   max_features: 50000
   min_df: 2
   lowercase: true
