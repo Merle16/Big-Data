@@ -1,8 +1,27 @@
 # Docker setup for the IMDB project
 
 ### From the root repository:
-  - `docker build -t big-data-imdb .`  &nbsp;*(build the Docker image once)*  
-  - `docker run --rm -it -v "$(pwd)/data:/app/data" big-data-imdb bash`  &nbsp;*(start a shell in the container with `data/` mounted)*
+
+0. Start Docker desktop and confirm it is on and running (If you have it installed, simply open the application)
+
+1. Go to the folder location where this repo is located
+- something like `cd your\own\ocation\to\...\big_data_assignment` 
+
+2. Open a local terminal and run the following to build the docker:
+  - `docker build -t big-data-imdb .`   
+
+  (!) including the dot 
+
+  (!) Make sure there is enough disk space
+
+3. After last command has ran (might take a while) run terminal inside the container with the local data/:
+
+  - `docker run --rm -it -v "$(pwd)/data:/app/data" big-data-imdb bash` 
+
+  if it does not work, try:
+  - `docker run --rm -it -v "$PWD/data:/app/data" big-data-imdb bash`
+
+You should see it running in your Docker desktop application
 
 ### Optional: running Jupyter inside Docker instead of a local virtual environment:
   - `docker run --rm -it -p 8888:8888 -v "$(pwd)/app:/app" big-data-imdb bash`
