@@ -18,12 +18,14 @@ features:
   remove_html: true
 
 model:
-  type: "logistic_regression"  # options: logistic_regression, xgboost, baseline
+  # Which model to use: logistic_regression, xgboost, or baseline. All settings below come from config (use lists for grid search).
+  type: "logistic_regression"
   # Grid search: use a list of values for any setting; all combinations are tried when grid_search.enabled is true.
-  # Single value or list of one = no grid (use first value). Example: C: [0.1, 1.0, 10.0]
+  # Single value or list of one = no grid (use first value).
   logistic_regression:
     C: [0.1, 1.0, 10.0]
     penalty: ["l2"]
+    solver: ["lbfgs"]  # lbfgs, liblinear, saga, etc.; if unset, derived from penalty
     max_iter: [1000]
   xgboost:
     n_estimators: [300]
@@ -31,7 +33,11 @@ model:
     learning_rate: [0.05, 0.1]
     subsample: [0.8]
     colsample_bytree: [0.8]
+    objective: ["binary:logistic"]
+    tree_method: ["hist"]
+    eval_metric: ["logloss"]
   baseline:
+    # model_type selects the algorithm; set to linear_svm or random_forest and configure the params below.
     model_type: ["linear_svm"]
     C: [0.1, 1.0, 10.0]
     n_estimators: [100]

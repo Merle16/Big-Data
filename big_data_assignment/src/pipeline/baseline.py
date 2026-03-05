@@ -212,12 +212,12 @@ def make_submission() -> str:
     - Loads training data from data/raw/csv (train-*.csv + movie_directors/movie_writers).
     - Loads validation_hidden.csv and test_hidden.csv from data/raw/csv.
     - Trains the model specified in config (model.type: logistic_regression, xgboost, or baseline).
-    - Writes two text files in submissions/<YYYY-MM-DD_HH-MM-SS>/:
-      - validation_predictions.txt
-      - test_predictions.txt
+    - Writes two text files in the `submissions/` folder with model name and timestamp in the filename:
+      - validation_predictions_<model_type>_<YYYY-MM-DD_HH-MM-SS>.txt
+      - test_predictions_<model_type>_<YYYY-MM-DD_HH-MM-SS>.txt
     Each line is the string "True" or "False" for the corresponding row in the hidden CSV.
 
-    Returns the path to the timestamped submission directory.
+    Returns the path to the submissions directory.
     """
     config = load_config()
 
@@ -268,23 +268,21 @@ def make_submission() -> str:
     val_lines = [to_submission_line(b) for b in y_val_pred]
     test_lines = [to_submission_line(b) for b in y_test_pred]
 
-    # Output directory: submissions/<timestamp>
+    # Output files: submissions/ with model type + timestamp in filenames
     base_submissions = resolve_path_from_config(config, "paths", "submissions_dir")
+    os.makedirs(base_submissions, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    out_dir = os.path.join(base_submissions, timestamp)
-    os.makedirs(out_dir, exist_ok=True)
-
-    val_path = os.path.join(out_dir, "validation_predictions.txt")
-    test_path = os.path.join(out_dir, "test_predictions.txt")
+    val_path = os.path.join(base_submissions, f"validation_predictions_{model_type}_{timestamp}.txt")
+    test_path = os.path.join(base_submissions, f"test_predictions_{model_type}_{timestamp}.txt")
     with open(val_path, "w", encoding="utf-8") as f:
         f.write("\n".join(val_lines) + "\n")
     with open(test_path, "w", encoding="utf-8") as f:
         f.write("\n".join(test_lines) + "\n")
 
-    print(f"Submission written to: {out_dir}")
+    print(f"Submission written to: {base_submissions}")
     print(f"  - {val_path} ({len(val_lines)} lines)")
     print(f"  - {test_path} ({len(test_lines)} lines)")
-    return out_dir
+    return base_submissions
 
 
 if __name__ == "__main__":
