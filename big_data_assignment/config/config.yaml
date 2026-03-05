@@ -1,0 +1,53 @@
+data:
+  raw_dir: "data/raw"
+  processed_dir: "data/processed"
+  train_file: "imdb_train.csv"
+  validation_file: "imdb_validation.csv"
+  test_file: "imdb_test.csv"
+  validation_hidden_file: "validation_hidden.csv"
+  test_hidden_file: "test_hidden.csv"
+  text_column: "review"
+  label_column: "label"
+
+features:
+  vectorizer: "tfidf"
+  ngram_range: [1, 2]
+  max_features: 50000
+  min_df: 2
+  lowercase: true
+  remove_html: true
+
+model:
+  type: "logistic_regression"  # options: logistic_regression, xgboost, baseline
+  logistic_regression:
+    C: 1.0
+    penalty: "l2"
+    max_iter: 1000
+  xgboost:
+    n_estimators: 300
+    max_depth: 6
+    learning_rate: 0.1
+    subsample: 0.8
+    colsample_bytree: 0.8
+  baseline:
+    model_type: "linear_svm"  # options could be linear_svm, random_forest
+    C: 1.0
+
+training:
+  validation_size: 0.2
+  random_seed: 42
+  n_jobs: -1
+
+paths:
+  models_dir: "models"
+  artifacts_dir: "artifacts"
+  logs_dir: "logs"
+
+json_conversion:
+  input_dir: "data/raw/json"
+  output_dir: "data/processed"
+  fields:
+    text: "review"
+    label: "label"
+  target_field: "label"
+
