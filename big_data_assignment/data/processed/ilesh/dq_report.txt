@@ -1,0 +1,70 @@
+====================================================================
+STEP 1 — DuckDB: Data Quality Detection & Fixing
+====================================================================
+
+>> A) Ingesting raw data...
+  movies_train_raw : 7,959 rows
+  directing        : 11,162 edges
+  writing          : 22,131 edges
+
+>> B) Automatic Data Quality Detection ...
+
+[D2] Disguised \N tokens per column:
+  startYear           :   786 (9.9%)
+  endYear             :  7173 (90.1%)
+  runtimeMinutes      :    13 (0.2%)
+  originalTitle       :     0 (0.0%)
+  primaryTitle        :     0 (0.0%)
+
+[D3] True NULL counts:
+  null_originalTitle            : 3988
+  null_numVotes                 : 790
+
+[D6] Duplicate tconst rows: 0 (none)
+
+[D7] numVotes IQR outlier analysis:
+  Q1=1736  Q3=11471  fence=26074  rows above=1098 (13.8%)
+
+[D8] Referential integrity (edges vs train+val+test combined):
+  directing: 0 edge tconst not in any split (OK)
+  writing: 0 edge tconst not in any split (OK)
+
+[D10] Label balance:
+label    n   pct
+False 3969 49.87
+ True 3990 50.13
+
+[D11] Missingness mechanism — label rate: missing vs present:
+  startYear:
+   is_missing    n  avg_label
+      False 7173     0.5040
+       True  786     0.4771
+  runtimeMinutes:
+   is_missing    n  avg_label
+      False 7946     0.5015
+       True   13     0.3846
+  (small difference → keep missingness flags as features)
+
+[D13] Text corruption — non-ASCII titles:
+  primaryTitle rows with synthetic accents: 2407 (30.2%)
+
+>> C) Applying fixes ...
+[F1] Unnamed:0 excluded at ingestion ✓
+[F6] \N person_ids dropped at ingestion ✓
+[F5] numVotes capped at IQR fence=26074 (1098 train rows capped)
+[F7] Director/writer success-rate encoding (train labels only)...
+  6,082 directors encoded
+  12,750 writers encoded
+
+>> D) Post-fix verification:
+ total  null_startYear  null_runtimeMinutes  null_numVotes  null_primaryTitle  max_numVotes_capped
+  7959           786.0                 13.0          790.0                0.0              26073.5
+
+>> E) Exporting Parquet for PySpark...
+  [OK] movies_train_clean       : 7,959 rows → movies_train.parquet
+  [OK] movies_val_clean         : 955 rows → movies_val.parquet
+  [OK] movies_test_clean        : 1,086 rows → movies_test.parquet
+  [OK] directing                : 11,162 rows → directing.parquet
+  [OK] writing                  : 22,131 rows → writing.parquet
+  [OK] director_success         : 6,082 rows → director_success.parquet
+  [OK] writer_success           : 12,750 rows → writer_success.parquet
