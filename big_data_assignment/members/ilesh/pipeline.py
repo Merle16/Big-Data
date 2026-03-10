@@ -682,17 +682,68 @@ def step3_model(train_pdf=None, val_pdf=None, test_pdf=None) -> None:
     auc = roc_auc_score(y_hv, model.predict_proba(X_hv)[:, 1])
     print(f"  Internal val — Accuracy={acc:.4f}  ROC-AUC={auc:.4f}")
 
+    # ── Naive baseline comparison ─────────────────────────────────────────────
+    # Trains three naive models on the SAME 80/20 split using only raw features
+    # (no DQ cleaning, no feature engineering) to quantify pipeline contribution.
+    print("\n  --- Naive baseline comparison (same split, no pipeline) ---")
+    import glob as _glob
+    import numpy as np
+
+    raw_frames = [pd.read_csv(p) for p in sorted(_glob.glob(str(RAW_CSV / "train-*.csv")))]
+    raw_df = pd.concat(raw_frames, ignore_index=True)
+    # Align to same tconst order as train_pdf so the 80/20 split is identical
+    raw_df = train_pdf[["tconst"]].merge(raw_df, on="tconst", how="left")
+
+    y_raw = (raw_df["label"].astype(str).str.strip() == "True").astype(int)
+
+    # (1) Majority-class: always predict the most common label
+    majority = int(y_raw.mode()[0])
+    maj_acc  = accuracy_score(y_hv, np.full(len(y_hv), majority))
+
+    # (2) Shared-baseline style: title length only (mirrors src/pipeline/baseline.py)
+    title_len = raw_df["primaryTitle"].fillna("").astype(str).str.len().values.reshape(-1, 1).astype(float)
+    tr_mask = y_all.index.isin(y_tr.index)
+    hv_mask = y_all.index.isin(y_hv.index)
+    tl_tr, tl_hv = title_len[tr_mask], title_len[hv_mask]
+    naive_lr = LogisticRegression(C=1.0, max_iter=1000, random_state=42).fit(tl_tr, y_tr)
+    naive_acc = accuracy_score(y_hv, naive_lr.predict(tl_hv))
+    naive_auc = roc_auc_score(y_hv, naive_lr.predict_proba(tl_hv)[:, 1])
+
+    # (3) Raw numeric features only: numVotes + runtimeMinutes + startYear, no cleaning
+    for col in ["numVotes", "runtimeMinutes", "startYear"]:
+        raw_df[col] = pd.to_numeric(raw_df[col], errors="coerce")
+    raw_num = raw_df[["numVotes", "runtimeMinutes", "startYear"]].fillna(0).astype(float)
+    rn_tr = raw_num.iloc[tr_mask]
+    rn_hv = raw_num.iloc[hv_mask]
+    raw_lr = LogisticRegression(C=1.0, max_iter=1000, random_state=42).fit(rn_tr, y_tr)
+    raw_acc = accuracy_score(y_hv, raw_lr.predict(rn_hv))
+    raw_auc = roc_auc_score(y_hv, raw_lr.predict_proba(rn_hv)[:, 1])
+
+    print(f"  {'Model':<40} {'Accuracy':>9} {'ROC-AUC':>9}")
+    print(f"  {'-'*58}")
+    print(f"  {'Majority class (always predict True/False)':<40} {maj_acc:>9.4f} {'—':>9}")
+    print(f"  {'Naive: title length only (shared baseline)':<40} {naive_acc:>9.4f} {naive_auc:>9.4f}")
+    print(f"  {'Raw numerics (no cleaning, no engineering)':<40} {raw_acc:>9.4f} {raw_auc:>9.4f}")
+    print(f"  {'Ilesh pipeline (DQ + 12 engineered features)':<40} {acc:>9.4f} {auc:>9.4f}")
+    print(f"  {'-'*58}")
+    print(f"  Pipeline gain over naive baseline : +{acc - naive_acc:+.4f} accuracy  +{auc - naive_auc:+.4f} AUC")
+
     # Write submissions
+    # IMPORTANT: Spark's toPandas() does not preserve row order.
+    # Kaggle expects predictions in the same order as the original CSV.
+    # Re-align by merging on tconst with the original CSVs before writing.
     ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
-    def _write_sub(X, path):
-        preds = model.predict(X[avail].fillna(0).astype(float))
+    def _write_sub(X, raw_csv_path, path):
+        raw_order = pd.read_csv(raw_csv_path)[["tconst"]]
+        X_ordered = raw_order.merge(X, on="tconst", how="left")
+        preds = model.predict(X_ordered[avail].fillna(0).astype(float))
         lines = ["True" if p == 1 else "False" for p in preds]
         path.write_text("\n".join(lines))
-        print(f"  [OK] {path.name}: {len(lines)} predictions")
+        print(f"  [OK] {path.name}: {len(lines)} predictions (order aligned to original CSV)")
 
-    _write_sub(val_pdf,  SUB_DIR / f"ilesh_val_{ts}.txt")
-    _write_sub(test_pdf, SUB_DIR / f"ilesh_test_{ts}.txt")
+    _write_sub(val_pdf,  VAL_CSV,  SUB_DIR / f"ilesh_val_{ts}.txt")
+    _write_sub(test_pdf, TEST_CSV, SUB_DIR / f"ilesh_test_{ts}.txt")
     print(f"[STEP 3 DONE] → {SUB_DIR}")
 
 
