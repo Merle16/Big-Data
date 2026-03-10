@@ -146,18 +146,25 @@ def step1_duckdb() -> None:
             FROM read_csv_auto(?, header=True, all_varchar=True, ignore_errors=True)
         """, [path])
 
-    # F6: drop \N person_id edges at ingestion (2 director, 297 writer rows)
+    # F6: drop invalid person_id edges at ingestion
+    # \N  (single-escaped) — 297 writer rows, standard IMDb unknown token
+    # \\N (double-escaped) —   2 director rows, corrupted variant (Djamel audit)
+    # Both must be excluded; joining them would pollute success-rate encoding.
     con.execute(f"""
         CREATE OR REPLACE TABLE directing AS
         SELECT tconst, director AS director_id
         FROM read_csv_auto('{DIRECTORS_CSV}', header=True)
-        WHERE director IS NOT NULL AND TRIM(director) != '\\N'
+        WHERE director IS NOT NULL
+          AND TRIM(director) NOT IN ('\\N', '\\\\N')
+          AND TRIM(director) != ''
     """)
     con.execute(f"""
         CREATE OR REPLACE TABLE writing AS
         SELECT tconst, writer AS writer_id
         FROM read_csv_auto('{WRITERS_CSV}', header=True)
-        WHERE writer IS NOT NULL AND TRIM(writer) != '\\N'
+        WHERE writer IS NOT NULL
+          AND TRIM(writer) NOT IN ('\\N', '\\\\N')
+          AND TRIM(writer) != ''
     """)
 
     n_train = con.execute("SELECT COUNT(*) FROM movies_train_raw").fetchone()[0]
@@ -168,9 +175,19 @@ def step1_duckdb() -> None:
     # ── B) AUTOMATIC DETECTION REPORT (D1–D13) ───────────────────────────────
     rpt("\n>> B) Automatic Data Quality Detection ...")
 
-    # D2: \N token counts per VARCHAR column
+    # D1: Schema validation — confirm all expected columns are present, no extras
+    rpt("\n[D1] Schema validation:")
+    actual_cols   = set(con.execute("DESCRIBE movies_train_raw").fetchdf()["column_name"].tolist())
+    expected_cols = {"tconst", "primaryTitle", "originalTitle", "startYear",
+                     "endYear", "runtimeMinutes", "numVotes", "label"}
+    missing_cols  = expected_cols - actual_cols
+    extra_cols    = actual_cols - expected_cols
+    rpt(f"  Expected columns present : {'✓' if not missing_cols else '✗ MISSING: ' + str(missing_cols)}")
+    rpt(f"  Unexpected extra columns : {'none' if not extra_cols else str(extra_cols)}")
+
+    # D2: \N token counts per VARCHAR column (incl. numVotes — silently cast to NULL by TRY_CAST)
     rpt("\n[D2] Disguised \\N tokens per column:")
-    for col in ["startYear", "endYear", "runtimeMinutes", "originalTitle", "primaryTitle"]:
+    for col in ["startYear", "endYear", "runtimeMinutes", "numVotes", "originalTitle", "primaryTitle"]:
         n = con.execute(
             f"SELECT COUNT(*) FROM movies_train_raw WHERE TRIM({col}) = '\\N'"
         ).fetchone()[0]
@@ -191,6 +208,12 @@ def step1_duckdb() -> None:
         n = int(null_df[col].values[0])
         if n > 0:
             rpt(f"  {col:<30}: {n}")
+
+    # D4: tconst format — every ID must match tt[0-9]+
+    n_bad_tconst = con.execute(
+        "SELECT COUNT(*) FROM movies_train_raw WHERE NOT regexp_matches(tconst, '^tt[0-9]+$')"
+    ).fetchone()[0]
+    rpt(f"\n[D4] Malformed tconst (not tt[0-9]+): {n_bad_tconst} ({'OK' if n_bad_tconst == 0 else '← FOUND'})")
 
     # D6: Duplicate tconst
     n_dup = con.execute(
@@ -229,6 +252,35 @@ def step1_duckdb() -> None:
         """).fetchone()[0]
         rpt(f"  {etbl}: {n} edge tconst not in any split {'(OK)' if n==0 else '← ISSUE'}")
 
+    # D5: Cross-split leakage — no tconst should appear in more than one split
+    rpt("\n[D5] Cross-split leakage (shared tconst across splits):")
+    for pair, q in [
+        ("train ∩ val ", "SELECT COUNT(*) FROM movies_train_raw t JOIN movies_val_raw  v ON t.tconst=v.tconst"),
+        ("train ∩ test", "SELECT COUNT(*) FROM movies_train_raw t JOIN movies_test_raw x ON t.tconst=x.tconst"),
+        ("val ∩ test  ", "SELECT COUNT(*) FROM movies_val_raw   v JOIN movies_test_raw x ON v.tconst=x.tconst"),
+    ]:
+        n = con.execute(q).fetchone()[0]
+        rpt(f"  {pair}: {n} {'(OK)' if n == 0 else '← LEAKAGE'}")
+
+    # D9: Person ID format — valid IDs must match nm[0-9]+
+    # Detects \N and \\N tokens before F6 removes them; confirms no other junk formats.
+    rpt("\n[D9] Person ID format check (pre-filter, raw CSVs):")
+    con.execute(f"CREATE OR REPLACE TEMP TABLE dir_raw AS SELECT * FROM read_csv_auto('{DIRECTORS_CSV}', header=True, all_varchar=True)")
+    con.execute(f"CREATE OR REPLACE TEMP TABLE wri_raw AS SELECT * FROM read_csv_auto('{WRITERS_CSV}',   header=True, all_varchar=True)")
+    for tbl, col in [("dir_raw", "director"), ("wri_raw", "writer")]:
+        bad = con.execute(f"""
+            SELECT TRIM({col}) AS bad_id, COUNT(*) AS n
+            FROM {tbl}
+            WHERE {col} IS NOT NULL AND NOT regexp_matches(TRIM({col}), '^nm[0-9]+$')
+            GROUP BY bad_id ORDER BY n DESC
+        """).fetchdf()
+        if bad.empty:
+            rpt(f"  {tbl}: all IDs match nm[0-9]+ (OK)")
+        else:
+            rpt(f"  {tbl}: {len(bad)} non-conforming ID pattern(s):")
+            rpt("  " + bad.to_string(index=False))
+    rpt("  → F6 removes all non-conforming IDs at ingestion")
+
     # D10: Label balance
     rpt("\n[D10] Label balance:")
     lb = con.execute("""
@@ -237,10 +289,11 @@ def step1_duckdb() -> None:
     """).fetchdf()
     rpt(lb.to_string(index=False))
 
-    # D11: Missingness mechanism
+    # D11: Missingness mechanism — label rate: missing vs present
     # label is 'True'/'False' string (all_varchar=True) — use CASE to convert
+    # numVotes included: \N token → NULL via TRY_CAST (F8); check it here for completeness
     rpt("\n[D11] Missingness mechanism — label rate: missing vs present:")
-    for col, token in [("startYear", "\\N"), ("runtimeMinutes", "\\N")]:
+    for col, token in [("startYear", "\\N"), ("runtimeMinutes", "\\N"), ("numVotes", "\\N")]:
         df = con.execute(f"""
             SELECT (TRIM({col})='{token}') AS is_missing, COUNT(*) AS n,
                    ROUND(AVG(CASE WHEN label='True' THEN 1.0 ELSE 0.0 END),4) AS avg_label
@@ -250,19 +303,48 @@ def step1_duckdb() -> None:
         rpt("  " + df.to_string(index=False))
     rpt("  (small difference → keep missingness flags as features)")
 
-    # D13: Text corruption (accent injection)
+    # D12: Range validity — catch physically impossible values surviving the \N filter
+    rpt("\n[D12] Out-of-range value checks (train):")
+    bad_year = con.execute("""
+        SELECT COUNT(*) FROM movies_train_raw
+        WHERE TRY_CAST(NULLIF(TRIM(startYear), '\\N') AS INTEGER) NOT BETWEEN 1880 AND 2030
+          AND TRIM(startYear) != '\\N' AND startYear IS NOT NULL
+    """).fetchone()[0]
+    bad_rt = con.execute("""
+        SELECT COUNT(*) FROM movies_train_raw
+        WHERE TRY_CAST(NULLIF(TRIM(runtimeMinutes), '\\N') AS INTEGER) <= 0
+          AND TRIM(runtimeMinutes) != '\\N' AND runtimeMinutes IS NOT NULL
+    """).fetchone()[0]
+    bad_votes = con.execute("""
+        SELECT COUNT(*) FROM movies_train_raw
+        WHERE TRY_CAST(numVotes AS DOUBLE) <= 0
+          AND numVotes IS NOT NULL AND TRIM(numVotes) != '\\N'
+    """).fetchone()[0]
+    rpt(f"  startYear outside [1880, 2030] : {bad_year} {'(OK)' if bad_year == 0 else '← FOUND'}")
+    rpt(f"  runtimeMinutes <= 0            : {bad_rt}   {'(OK)' if bad_rt == 0 else '← FOUND'}")
+    rpt(f"  numVotes <= 0                  : {bad_votes} {'(OK)' if bad_votes == 0 else '← FOUND'}")
+
+    # D13: Text corruption (accent injection) — both title columns
     rpt("\n[D13] Text corruption — non-ASCII titles:")
     import pandas as pd
-    text_df = con.execute("SELECT primaryTitle FROM movies_train_raw").fetchdf()
-    n_corrupt = text_df["primaryTitle"].apply(
+    primary_df  = con.execute("SELECT primaryTitle FROM movies_train_raw").fetchdf()
+    original_df = con.execute(
+        "SELECT originalTitle FROM movies_train_raw WHERE originalTitle IS NOT NULL"
+    ).fetchdf()
+    n_primary  = primary_df["primaryTitle"].apply(
         lambda x: _normalize_title(str(x)) != str(x)
     ).sum()
-    rpt(f"  primaryTitle rows with synthetic accents: {n_corrupt} ({100*n_corrupt/n_train:.1f}%)")
+    n_original = original_df["originalTitle"].apply(
+        lambda x: _normalize_title(str(x)) != str(x)
+    ).sum()
+    rpt(f"  primaryTitle  rows with synthetic accents: {n_primary}  ({100*n_primary/n_train:.1f}%)")
+    rpt(f"  originalTitle rows with synthetic accents: {n_original} ({100*n_original/len(original_df):.1f}% of non-null rows)")
 
     # ── C) AUTOMATIC FIXES ───────────────────────────────────────────────────
     rpt("\n>> C) Applying fixes ...")
     rpt("[F1] Unnamed:0 excluded at ingestion ✓")
-    rpt("[F6] \\N person_ids dropped at ingestion ✓")
+    rpt("[F6] \\N + \\\\N person_ids dropped at ingestion (\\N=297 writers, \\\\N=2 directors) ✓")
+    rpt("[F8] numVotes \\N token → NULL via TRY_CAST (implicit; consistent with F3 for numeric cols) ✓")
 
     def _build_clean(out_tbl: str, src: str, has_label: bool) -> None:
         """One-pass clean:

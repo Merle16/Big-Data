@@ -122,6 +122,7 @@ step1_duckdb()
 | F3 | `\N`→NULL for `startYear`, `runtimeMinutes` | `TRY_CAST(NULLIF(NULLIF(TRIM),''),'\N')` handles whitespace variants |
 | F4 | `originalTitle` NULLs | `COALESCE` → `primaryTitle` (50.1% missing) |
 | F5 | `numVotes` IQR cap | Train fence=26,074 applied to all splits (no leakage) |
-| F6 | Drop `\N` person IDs | 297 writer rows removed at ingestion |
+| F6 | Drop invalid person IDs | `\N` (297 writers) + `\\N` double-escaped (2 directors) removed at ingestion via `NOT IN` |
 | F7 | Director/writer success-rate encoding | `INNER JOIN` train labels only → leakage-free |
-| F9 | NFKD title normalisation | DuckDB UDF; 30% of titles have synthetic accent injection |
+| F8 | `numVotes \N` → NULL | Implicit via `TRY_CAST(numVotes AS DOUBLE)` — consistent with F3's explicit NULLIF |
+| F9 | NFKD title normalisation | DuckDB UDF; ~30% of `primaryTitle` + ~22% of non-null `originalTitle` have synthetic accent injection |
