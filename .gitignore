@@ -22,6 +22,7 @@ __pycache__/
 # Virtual environments
 .venv/
 venv/
+venv_fresh/
 env/
 
 # Jupyter
@@ -35,6 +36,10 @@ predictions/
 
 # Processed/intermediate data (keep raw data under version control if needed)
 data/processed/
+
+# DuckDB databases and write-ahead logs
+*.duckdb
+*.duckdb.wal
 
 # Personal experiments (if you want to keep them local)
 members/*/experiments/
