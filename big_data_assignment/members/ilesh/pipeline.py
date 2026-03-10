@@ -680,53 +680,117 @@ def step3_model(train_pdf=None, val_pdf=None, test_pdf=None) -> None:
 
     acc = accuracy_score(y_hv, model.predict(X_hv))
     auc = roc_auc_score(y_hv, model.predict_proba(X_hv)[:, 1])
-    print(f"  Internal val — Accuracy={acc:.4f}  ROC-AUC={auc:.4f}")
+    print(f"  Internal val — Accuracy={acc:.4f}  ROC-AUC={auc:.4f}  ← NOTE: inflated (success rates computed on full train)")
 
-    # ── Naive baseline comparison ─────────────────────────────────────────────
-    # Trains three naive models on the SAME 80/20 split using only raw features
-    # (no DQ cleaning, no feature engineering) to quantify pipeline contribution.
-    print("\n  --- Naive baseline comparison (same split, no pipeline) ---")
+    # ── Leakage-free baseline comparison ──────────────────────────────────────
+    # Re-runs the full feature engineering fold-aware:
+    #   IQR fence, medians, success rates all computed on the 80% fold only,
+    #   then applied to the 20% holdout → no label leakage.
+    # Naive models use raw CSV features (no cleaning) on the same split.
+    print("\n  --- Leakage-free baseline comparison (fold-aware pipeline) ---")
     import glob as _glob
     import numpy as np
 
+    # Load raw data
     raw_frames = [pd.read_csv(p) for p in sorted(_glob.glob(str(RAW_CSV / "train-*.csv")))]
     raw_df = pd.concat(raw_frames, ignore_index=True)
-    # Align to same tconst order as train_pdf so the 80/20 split is identical
-    raw_df = train_pdf[["tconst"]].merge(raw_df, on="tconst", how="left")
 
-    y_raw = (raw_df["label"].astype(str).str.strip() == "True").astype(int)
+    # Parse numeric columns cleanly
+    movies_raw = pd.DataFrame({
+        "tconst": raw_df["tconst"],
+        "startYear":      pd.to_numeric(raw_df["startYear"].replace("\\N", float("nan")), errors="coerce"),
+        "runtimeMinutes": pd.to_numeric(raw_df["runtimeMinutes"].replace("\\N", float("nan")), errors="coerce"),
+        "numVotes":       pd.to_numeric(raw_df["numVotes"].replace("\\N", float("nan")), errors="coerce"),
+        "label":          (raw_df["label"].astype(str).str.strip() == "True").astype(int),
+        "primaryTitle":   raw_df["primaryTitle"].fillna(""),
+    })
 
-    # (1) Majority-class: always predict the most common label
-    majority = int(y_raw.mode()[0])
-    maj_acc  = accuracy_score(y_hv, np.full(len(y_hv), majority))
+    # Load edges
+    dir_df = pd.read_csv(str(RAW_CSV / "movie_directors.csv"))
+    wri_df = pd.read_csv(str(RAW_CSV / "movie_writers.csv"))
+    dir_df = dir_df[~dir_df["director"].isin(["\\N","\\\\N",""])].dropna(subset=["director"])
+    wri_df = wri_df[~wri_df["writer"].isin(["\\N","\\\\N",""])].dropna(subset=["writer"])
+    dir_df.columns = ["tconst","director_id"]
+    wri_df.columns = ["tconst","writer_id"]
 
-    # (2) Shared-baseline style: title length only (mirrors src/pipeline/baseline.py)
-    title_len = raw_df["primaryTitle"].fillna("").astype(str).str.len().values.reshape(-1, 1).astype(float)
-    tr_mask = y_all.index.isin(y_tr.index)
-    hv_mask = y_all.index.isin(y_hv.index)
-    tl_tr, tl_hv = title_len[tr_mask], title_len[hv_mask]
-    naive_lr = LogisticRegression(C=1.0, max_iter=1000, random_state=42).fit(tl_tr, y_tr)
-    naive_acc = accuracy_score(y_hv, naive_lr.predict(tl_hv))
-    naive_auc = roc_auc_score(y_hv, naive_lr.predict_proba(tl_hv)[:, 1])
+    # Same 80/20 split by index
+    tr_idx, hv_idx = train_test_split(
+        movies_raw.index, test_size=0.2, random_state=42, stratify=movies_raw["label"]
+    )
+    tr = movies_raw.loc[tr_idx].copy().reset_index(drop=True)
+    hv = movies_raw.loc[hv_idx].copy().reset_index(drop=True)
 
-    # (3) Raw numeric features only: numVotes + runtimeMinutes + startYear, no cleaning
-    for col in ["numVotes", "runtimeMinutes", "startYear"]:
-        raw_df[col] = pd.to_numeric(raw_df[col], errors="coerce")
-    raw_num = raw_df[["numVotes", "runtimeMinutes", "startYear"]].fillna(0).astype(float)
-    rn_tr = raw_num.iloc[tr_mask]
-    rn_hv = raw_num.iloc[hv_mask]
-    raw_lr = LogisticRegression(C=1.0, max_iter=1000, random_state=42).fit(rn_tr, y_tr)
-    raw_acc = accuracy_score(y_hv, raw_lr.predict(rn_hv))
-    raw_auc = roc_auc_score(y_hv, raw_lr.predict_proba(rn_hv)[:, 1])
+    # (A) Naive: majority class
+    maj_acc = accuracy_score(hv["label"], np.full(len(hv), int(tr["label"].mode()[0])))
 
-    print(f"  {'Model':<40} {'Accuracy':>9} {'ROC-AUC':>9}")
-    print(f"  {'-'*58}")
-    print(f"  {'Majority class (always predict True/False)':<40} {maj_acc:>9.4f} {'—':>9}")
-    print(f"  {'Naive: title length only (shared baseline)':<40} {naive_acc:>9.4f} {naive_auc:>9.4f}")
-    print(f"  {'Raw numerics (no cleaning, no engineering)':<40} {raw_acc:>9.4f} {raw_auc:>9.4f}")
-    print(f"  {'Ilesh pipeline (DQ + 12 engineered features)':<40} {acc:>9.4f} {auc:>9.4f}")
-    print(f"  {'-'*58}")
-    print(f"  Pipeline gain over naive baseline : +{acc - naive_acc:+.4f} accuracy  +{auc - naive_auc:+.4f} AUC")
+    # (B) Naive: title length only (mirrors shared baseline in src/)
+    tl_tr = tr["primaryTitle"].str.len().values.reshape(-1,1).astype(float)
+    tl_hv = hv["primaryTitle"].str.len().values.reshape(-1,1).astype(float)
+    naive_lr  = LogisticRegression(C=1.0, max_iter=1000, random_state=42).fit(tl_tr, tr["label"])
+    naive_acc = accuracy_score(hv["label"], naive_lr.predict(tl_hv))
+    naive_auc = roc_auc_score(hv["label"], naive_lr.predict_proba(tl_hv)[:,1])
+
+    # (C) Naive: raw 3 numerics, \N→0, no cap, no log
+    rn_tr = tr[["numVotes","runtimeMinutes","startYear"]].fillna(0).astype(float)
+    rn_hv = hv[["numVotes","runtimeMinutes","startYear"]].fillna(0).astype(float)
+    raw_lr  = LogisticRegression(C=1.0, max_iter=1000, random_state=42).fit(rn_tr, tr["label"])
+    raw_acc = accuracy_score(hv["label"], raw_lr.predict(rn_hv))
+    raw_auc = roc_auc_score(hv["label"], raw_lr.predict_proba(rn_hv)[:,1])
+
+    # (D) Full pipeline — fold-aware (no leakage)
+    # IQR + missingness flags + median imputation on train fold only
+    q1f, q3f = tr["numVotes"].quantile(0.25), tr["numVotes"].quantile(0.75)
+    fence_f  = q3f + 1.5*(q3f-q1f)
+    meds = {c: tr[c].median() for c in ["startYear","runtimeMinutes","numVotes"]}
+    for df in [tr, hv]:
+        df["numVotes"] = df["numVotes"].clip(upper=fence_f)
+        df["is_missing_numVotes"]       = df["numVotes"].isna().astype(float)
+        df["is_missing_startYear"]      = df["startYear"].isna().astype(float)
+        df["is_missing_runtimeMinutes"] = df["runtimeMinutes"].isna().astype(float)
+        for c, v in meds.items():
+            df[c] = df[c].fillna(v)
+        df["log_numVotes"] = np.log1p(df["numVotes"])
+
+    # Success rates from train fold labels only → applied to both folds
+    def _add_person_feats(tr_df, apply_df, edges, id_col, prefix):
+        rates = (edges.merge(tr_df[["tconst","label"]], on="tconst", how="inner")
+                      .groupby(id_col)["label"].mean().rename("rate").reset_index())
+        agg   = (edges.merge(rates, on=id_col, how="left")
+                      .groupby("tconst")["rate"]
+                      .agg(avg="mean", max="max").reset_index()
+                      .rename(columns={"avg":f"avg_{prefix}_success_rate",
+                                       "max":f"max_{prefix}_success_rate"}))
+        cnt   = (edges.groupby("tconst")[id_col].nunique()
+                      .rename(f"num_{prefix}s").reset_index())
+        out = apply_df.merge(cnt, on="tconst", how="left").merge(agg, on="tconst", how="left")
+        out[f"num_{prefix}s"]             = out[f"num_{prefix}s"].fillna(0)
+        out[f"avg_{prefix}_success_rate"] = out[f"avg_{prefix}_success_rate"].fillna(0.5)
+        out[f"max_{prefix}_success_rate"] = out[f"max_{prefix}_success_rate"].fillna(0.5)
+        return out
+
+    tr = _add_person_feats(tr, tr, dir_df, "director_id", "director")
+    hv = _add_person_feats(tr, hv, dir_df, "director_id", "director")
+    tr = _add_person_feats(tr, tr, wri_df, "writer_id",   "writer")
+    hv = _add_person_feats(tr, hv, wri_df, "writer_id",   "writer")
+
+    PIPE_FEAT = ["startYear","runtimeMinutes","log_numVotes",
+                 "num_directors","num_writers",
+                 "avg_director_success_rate","max_director_success_rate",
+                 "avg_writer_success_rate","max_writer_success_rate",
+                 "is_missing_numVotes","is_missing_startYear","is_missing_runtimeMinutes"]
+    pipe_lr = LogisticRegression(C=1.0, max_iter=1000, random_state=42)
+    pipe_lr.fit(tr[PIPE_FEAT].fillna(0).astype(float), tr["label"])
+    pipe_acc = accuracy_score(hv["label"], pipe_lr.predict(hv[PIPE_FEAT].fillna(0).astype(float)))
+    pipe_auc = roc_auc_score(hv["label"], pipe_lr.predict_proba(hv[PIPE_FEAT].fillna(0).astype(float))[:,1])
+
+    print(f"  {'Model':<44} {'Accuracy':>9} {'ROC-AUC':>9}")
+    print(f"  {'-'*62}")
+    print(f"  {'Majority class (always predict True/False)':<44} {maj_acc:>9.4f} {'—':>9}")
+    print(f"  {'Naive: title length only (shared baseline)':<44} {naive_acc:>9.4f} {naive_auc:>9.4f}")
+    print(f"  {'Raw numerics (no cleaning, no engineering)':<44} {raw_acc:>9.4f} {raw_auc:>9.4f}")
+    print(f"  {'Ilesh pipeline — leakage-free (12 features)':<44} {pipe_acc:>9.4f} {pipe_auc:>9.4f}")
+    print(f"  {'-'*62}")
+    print(f"  Pipeline gain over naive : +{pipe_acc-naive_acc:.4f} accuracy  +{pipe_auc-naive_auc:.4f} AUC")
 
     # Write submissions
     # IMPORTANT: Spark's toPandas() does not preserve row order.
