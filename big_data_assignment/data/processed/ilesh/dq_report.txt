@@ -4,21 +4,28 @@ STEP 1 — DuckDB: Data Quality Detection & Fixing
 
 >> A) Ingesting raw data...
   movies_train_raw : 7,959 rows
-  directing        : 11,162 edges
+  directing        : 11,160 edges
   writing          : 22,131 edges
 
 >> B) Automatic Data Quality Detection ...
+
+[D1] Schema validation:
+  Expected columns present : ✓
+  Unexpected extra columns : none
 
 [D2] Disguised \N tokens per column:
   startYear           :   786 (9.9%)
   endYear             :  7173 (90.1%)
   runtimeMinutes      :    13 (0.2%)
+  numVotes            :     0 (0.0%)
   originalTitle       :     0 (0.0%)
   primaryTitle        :     0 (0.0%)
 
 [D3] True NULL counts:
   null_originalTitle            : 3988
   null_numVotes                 : 790
+
+[D4] Malformed tconst (not tt[0-9]+): 0 (OK)
 
 [D6] Duplicate tconst rows: 0 (none)
 
@@ -28,6 +35,20 @@ STEP 1 — DuckDB: Data Quality Detection & Fixing
 [D8] Referential integrity (edges vs train+val+test combined):
   directing: 0 edge tconst not in any split (OK)
   writing: 0 edge tconst not in any split (OK)
+
+[D5] Cross-split leakage (shared tconst across splits):
+  train ∩ val : 0 (OK)
+  train ∩ test: 0 (OK)
+  val ∩ test  : 0 (OK)
+
+[D9] Person ID format check (pre-filter, raw CSVs):
+  dir_raw: 1 non-conforming ID pattern(s):
+  bad_id  n
+   \\N  2
+  wri_raw: 1 non-conforming ID pattern(s):
+  bad_id   n
+    \N 297
+  → F6 removes all non-conforming IDs at ingestion
 
 [D10] Label balance:
 label    n   pct
@@ -43,17 +64,28 @@ False 3969 49.87
    is_missing    n  avg_label
       False 7946     0.5015
        True   13     0.3846
+  numVotes:
+   is_missing    n  avg_label
+      False 7169     0.5038
+       <NA>  790     0.4785
   (small difference → keep missingness flags as features)
 
+[D12] Out-of-range value checks (train):
+  startYear outside [1880, 2030] : 0 (OK)
+  runtimeMinutes <= 0            : 0   (OK)
+  numVotes <= 0                  : 0 (OK)
+
 [D13] Text corruption — non-ASCII titles:
-  primaryTitle rows with synthetic accents: 2407 (30.2%)
+  primaryTitle  rows with synthetic accents: 2407  (30.2%)
+  originalTitle rows with synthetic accents: 883 (22.2% of non-null rows)
 
 >> C) Applying fixes ...
 [F1] Unnamed:0 excluded at ingestion ✓
-[F6] \N person_ids dropped at ingestion ✓
+[F6] \N + \\N person_ids dropped at ingestion (\N=297 writers, \\N=2 directors) ✓
+[F8] numVotes \N token → NULL via TRY_CAST (implicit; consistent with F3 for numeric cols) ✓
 [F5] numVotes capped at IQR fence=26074 (1098 train rows capped)
 [F7] Director/writer success-rate encoding (train labels only)...
-  6,082 directors encoded
+  6,081 directors encoded
   12,750 writers encoded
 
 >> D) Post-fix verification:
@@ -64,7 +96,7 @@ False 3969 49.87
   [OK] movies_train_clean       : 7,959 rows → movies_train.parquet
   [OK] movies_val_clean         : 955 rows → movies_val.parquet
   [OK] movies_test_clean        : 1,086 rows → movies_test.parquet
-  [OK] directing                : 11,162 rows → directing.parquet
+  [OK] directing                : 11,160 rows → directing.parquet
   [OK] writing                  : 22,131 rows → writing.parquet
-  [OK] director_success         : 6,082 rows → director_success.parquet
+  [OK] director_success         : 6,081 rows → director_success.parquet
   [OK] writer_success           : 12,750 rows → writer_success.parquet
