@@ -29,9 +29,8 @@ from .s5_join import JoinBuilder
 
 _ROOT = Path(__file__).resolve().parents[2]
 
-# ── Human-in-the-loop configurations ──────────────────────────────────────────
+# ── Human-in-the-loop configurations after quality-report checks!
 DISGUISED_TOKENS = ("\\N", "\\\\N")
-# ─────────────────────────────────────────────────────────────────────────────
 
 
 def run_pipeline(con: duckdb.DuckDBPyConnection, table: str) -> str:
