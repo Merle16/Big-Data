@@ -21,16 +21,13 @@ from pathlib import Path
 import duckdb
 
 from .s0_enforce_schema import get_drop_cols
-from .s1_missing import MissingTokenReplacer
+from .s1_missing import DISGUISED_TOKENS, MissingTokenReplacer
 from .s2_dtypes import DTypeEnforcer
 from .s3_standardization import StringStandardizer
 from .s4_deduplication import Deduplicator
 from .s5_join import JoinBuilder
 
 _ROOT = Path(__file__).resolve().parents[2]
-
-# ── Human-in-the-loop configurations after quality-report checks!
-DISGUISED_TOKENS = ("\\N", "\\\\N")
 
 
 def run_pipeline(con: duckdb.DuckDBPyConnection, table: str) -> str:

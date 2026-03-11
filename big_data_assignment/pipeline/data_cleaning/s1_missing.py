@@ -2,6 +2,11 @@
 
 import duckdb
 
+# ── Human-in-the-loop: add any dataset-specific disguised-missing tokens here.
+# Identified via quality-report checks before running the pipeline.
+DISGUISED_TOKENS: tuple[str, ...] = ("\\N", "\\\\N")
+
+
 class MissingTokenReplacer:
     """Replace disguised missing-value tokens with NULL in all columns using DuckDB.
     Optionally drop columns that are too sparse to be useful (e.g. endYear in train CSVs)."""
