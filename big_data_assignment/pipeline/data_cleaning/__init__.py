@@ -12,3 +12,27 @@ Pipeline order
 5. normalization.py   — distribution transforms (log, sqrt) for MICE prep
 6. imputation.py      — MICE imputation for remaining missing values
 """
+
+from .missing import MissingTokenReplacer
+from .dtypes import DTypeEnforcer
+from .standardization import StringStandardizer
+
+
+# before running the pipeline, run the quality report to detect quality errors.
+# human-in-the-loop configurations
+
+DISGUISED_TOKENS = ("\\N", "\\\\N")
+TRAIN_DROP_COLS  = ("endYear",)
+YEAR_RANGE       = (1900, 2026)
+
+
+def run_pipeline(con, table: str, is_train: bool = True) -> str:
+    """Run all cleaning steps sequentially. Returns final view name."""
+    drop = TRAIN_DROP_COLS if is_train else ()
+    table = MissingTokenReplacer(tokens=DISGUISED_TOKENS, drop_cols=drop).transform(con, table)
+    table = DTypeEnforcer(year_range=YEAR_RANGE).transform(con, table)
+    table = StringStandardizer().transform(con, table)
+    # 4. deduplication
+    # 5. normalization
+    # 6. imputation
+    return table
