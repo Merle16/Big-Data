@@ -40,8 +40,11 @@ class StringStandardizer:
         return bool(sample) and sum(_ID_LIKE_RE.match(str(v)) is not None for v in sample) / len(sample) > 0.8
 
     def transform(self, con: duckdb.DuckDBPyConnection, table: str) -> str:
-        con.create_function("_normalize",    _normalize,    [str], str, null_handling="special")
-        con.create_function("_fingerprint",  _fingerprint,  [str], str, null_handling="special")
+        for name, fn in [("_normalize", _normalize), ("_fingerprint", _fingerprint)]:
+            try:
+                con.create_function(name, fn, [str], str, null_handling="special")
+            except Exception:
+                pass  # already registered on this connection
 
         cols = con.execute(f"DESCRIBE {table}").fetchall()
         exprs = []

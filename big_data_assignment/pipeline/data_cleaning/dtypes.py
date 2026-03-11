@@ -1,47 +1,65 @@
-"""Step 2: Cast VARCHAR columns to the correct numeric or year type using DuckDB TRY_CAST."""
+"""Step 2: Cast all columns to their most specific correct type using DuckDB TRY_CAST."""
 
 import duckdb
 
+
 class DTypeEnforcer:
-    """Cast VARCHAR columns to DOUBLE (numeric) or INTEGER (year) where the data supports it.
-    ID-like and text columns remain VARCHAR. Non-VARCHAR columns pass through unchanged."""
+    """Infer and cast each column to its most specific correct type.
 
-    def __init__(self, year_range: tuple[int, int] = YEAR_RANGE):
-        self.year_range = year_range
+    VARCHAR  → probed for BOOLEAN, INTEGER, DOUBLE (in that order of specificity).
+    BIGINT   → downcast to BOOLEAN (0/1 only) or INTEGER (fits range).
+    All other types pass through unchanged.
+    """
 
-    def _target_type(self, con: duckdb.DuckDBPyConnection, table: str, col: str) -> str | None:
-        """Return 'year', 'double', or None (keep VARCHAR) based on column content."""
-        q = f'"{col}"'
-        s = f"TRIM(CAST({q} AS VARCHAR))"
-        lo, hi = self.year_range
-
-        total, numeric, year = con.execute(f"""
+    def _infer_varchar(self, con: duckdb.DuckDBPyConnection, table: str, col: str) -> str | None:
+        q, s = f'"{col}"', f'TRIM(CAST("{col}" AS VARCHAR))'
+        total, boolean, numeric, whole = con.execute(f"""
             SELECT
                 COUNT({q}),
+                SUM(CASE WHEN LOWER({s}) IN ('true', 'false') THEN 1 ELSE 0 END),
                 SUM(CASE WHEN TRY_CAST({s} AS DOUBLE)  IS NOT NULL THEN 1 ELSE 0 END),
-                SUM(CASE WHEN TRY_CAST({s} AS INTEGER) BETWEEN {lo} AND {hi} THEN 1 ELSE 0 END)
+                SUM(CASE WHEN TRY_CAST({s} AS INTEGER) IS NOT NULL THEN 1 ELSE 0 END)
             FROM {table} WHERE {q} IS NOT NULL
         """).fetchone()
 
         if total == 0 or numeric / total < 0.5:
             return None
-        return "year" if year / total > 0.9 else "double"
+        if boolean / total > 0.95:
+            return "BOOLEAN"
+        return "INTEGER" if whole / total > 0.9 else "DOUBLE"
+
+    def _infer_bigint(self, con: duckdb.DuckDBPyConnection, table: str, col: str) -> str | None:
+        q = f'"{col}"'
+        total, binary, fits = con.execute(f"""
+            SELECT
+                COUNT({q}),
+                SUM(CASE WHEN {q} IN (0, 1) THEN 1 ELSE 0 END),
+                SUM(CASE WHEN {q} BETWEEN -2147483648 AND 2147483647 THEN 1 ELSE 0 END)
+            FROM {table} WHERE {q} IS NOT NULL
+        """).fetchone()
+
+        if total == 0:
+            return None
+        if binary / total > 0.99:
+            return "BOOLEAN"
+        if fits / total > 0.99:
+            return "INTEGER"
+        return None
 
     def transform(self, con: duckdb.DuckDBPyConnection, table: str) -> str:
         """Create a typed view. Returns the new view name."""
         cols = con.execute(f"DESCRIBE {table}").fetchall()
         exprs = []
         for col, dtype, *_ in cols:
-            q = f'"{col}"'
-            s = f"TRIM(CAST({q} AS VARCHAR))"
-            if "VARCHAR" in dtype.upper():
-                target = self._target_type(con, table, col)
-                if target == "year":
-                    exprs.append(f"TRY_CAST({s} AS INTEGER) AS {q}")
-                elif target == "double":
-                    exprs.append(f"TRY_CAST({s} AS DOUBLE) AS {q}")
-                else:
-                    exprs.append(q)
+            q, s = f'"{col}"', f'TRIM(CAST("{col}" AS VARCHAR))'
+            dt = dtype.upper()
+
+            if "VARCHAR" in dt:
+                t = self._infer_varchar(con, table, col)
+                exprs.append(f"TRY_CAST({s} AS {t}) AS {q}" if t else q)
+            elif "BIGINT" in dt:
+                t = self._infer_bigint(con, table, col)
+                exprs.append(f"CAST({q} AS {t}) AS {q}" if t else q)
             else:
                 exprs.append(q)
 
