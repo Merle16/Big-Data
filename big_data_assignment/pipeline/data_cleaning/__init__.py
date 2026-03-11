@@ -18,7 +18,7 @@ Movies with the same name but different start years are always different movies.
 -> lisa/vanshita
 
 5. Outlier detection & treatment (IQR capping) (ask ilesh)
--> ????
+-> ???? --> use log transformation in feature engineering instead! no IQR in pipeline.
 
 6. MICE imputation for missing values.
 -> lisa
