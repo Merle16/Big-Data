@@ -97,6 +97,38 @@ def get_drop_cols(table: str) -> tuple[str, ...]:
     return spec.get("drop_cols", ()) if spec else ()
 
 
+# ── SQL-based schema application ─────────────────────────────────────────────
+
+def apply(con: duckdb.DuckDBPyConnection, table: str) -> str:
+    """Create a DuckDB VIEW that enforces the declared schema for *table*.
+
+    Uses SQL DESCRIBE to introspect current columns, then builds a SELECT that
+    omits any ``drop_cols`` declared in SCHEMA.  Returns the new view name, or
+    the original table name when nothing needs to be dropped.
+    """
+    spec = _match(table)
+    if spec is None:
+        return table
+
+    drop = set(spec.get("drop_cols", ()))
+    if not drop:
+        return table
+
+    keep = [
+        f'"{r[0]}"'
+        for r in con.execute(f"DESCRIBE {table}").fetchall()
+        if r[0] not in drop
+    ]
+    if not keep:
+        return table
+
+    out = f"{table}_schema"
+    con.execute(
+        f"CREATE OR REPLACE VIEW {out} AS SELECT {', '.join(keep)} FROM {table}"
+    )
+    return out
+
+
 # ── SQL-based schema validation ──────────────────────────────────────────────
 
 def validate(con: duckdb.DuckDBPyConnection, table: str) -> list[str]:

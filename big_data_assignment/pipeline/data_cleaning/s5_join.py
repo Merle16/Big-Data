@@ -20,19 +20,22 @@ Relational schema (after steps 1–4 clean each table independently)
     SKIPPED:  title_principals (avg 20 rows/tconst → too wide, use in feature engineering)
 """
 
+import warnings
+
 import duckdb
 from pathlib import Path
 
 
 # ── Editable: columns to SELECT from each 1:1 join table ─────────────────────
 # Only NEW columns that don't already exist in train.  Edit to add/remove.
+# No 'key' needed — the join key is auto-detected from shared ID columns via
+# DuckDB DESCRIBE (see _detect_join_key).  Tables whose key doesn't exist in
+# the base (e.g. nconst-only tables like name_basics) are skipped with a warning.
 ONE_TO_ONE_JOINS = {
     "title_basics": {
-        "key":  "tconst",
         "cols": ["genres", "titleType", "isAdult"],
     },
     "title_crew": {
-        "key":  "tconst",
         "cols": ["directors", "writers"],
     },
 }
@@ -55,6 +58,11 @@ MANY_TO_MANY_AGGS = {
 # ── Editable: person metadata table ──────────────────────────────────────────
 PERSON_TABLE = "name_basics"
 PERSON_KEY   = "nconst"
+
+# ID columns that can serve as join keys, checked in priority order.
+# Tables keyed only on nconst (e.g. name_basics) cannot join directly to a
+# tconst-only base and will be skipped automatically.
+_JOIN_KEY_CANDIDATES = ("tconst", "nconst")
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -72,6 +80,23 @@ class JoinBuilder:
         if stem not in self.cleaned:
             raise KeyError(f"Table '{stem}' not found in cleaned views: {list(self.cleaned)}")
         return self.cleaned[stem]
+
+    def _detect_join_key(
+        self, con: duckdb.DuckDBPyConnection, base: str, tbl: str
+    ) -> str | None:
+        """Return the first candidate key column present in both base and tbl.
+
+        Uses DuckDB DESCRIBE on each table so that key detection is driven by
+        the actual runtime schema rather than hard-coded config.  Returns None
+        when no shared candidate exists (e.g. a nconst-only table joined to a
+        tconst-only base).
+        """
+        base_cols = {r[0] for r in con.execute(f"DESCRIBE {base}").fetchall()}
+        tbl_cols  = {r[0] for r in con.execute(f"DESCRIBE {tbl}").fetchall()}
+        for key in _JOIN_KEY_CANDIDATES:
+            if key in base_cols and key in tbl_cols:
+                return key
+        return None
 
     def _create_m2m_agg(self, con: duckdb.DuckDBPyConnection, stem: str, spec: dict) -> str:
         """Aggregate a many-to-many edge table to 1 row per tconst with person metadata."""
@@ -105,9 +130,16 @@ class JoinBuilder:
         joins  = []
 
         for stem, spec in ONE_TO_ONE_JOINS.items():
-            tbl   = self._resolve(stem)
+            tbl = self._resolve(stem)
+            key = self._detect_join_key(con, base, tbl)
+            if key is None:
+                warnings.warn(
+                    f"Skipping 1:1 join for '{stem}': no shared key column "
+                    f"({', '.join(_JOIN_KEY_CANDIDATES)}) found between "
+                    f"'{base}' and '{tbl}'."
+                )
+                continue
             alias = f"o_{stem}"
-            key   = spec["key"]
             for col in spec["cols"]:
                 select.append(f'{alias}."{col}"')
             joins.append(f'LEFT JOIN {tbl} AS {alias} ON b."{key}" = {alias}."{key}"')
