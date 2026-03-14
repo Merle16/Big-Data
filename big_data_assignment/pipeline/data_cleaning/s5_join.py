@@ -27,17 +27,27 @@ from pathlib import Path
 
 
 # ── Editable: columns to SELECT from each 1:1 join table ─────────────────────
-# Only NEW columns that don't already exist in train.  Edit to add/remove.
-# No 'key' needed — the join key is auto-detected from shared ID columns via
-# DuckDB DESCRIBE (see _detect_join_key).  Tables whose key doesn't exist in
-# the base (e.g. nconst-only tables like name_basics) are skipped with a warning.
+# Only NEW columns not already in train/val/test.  Edit to add/remove.
+#
+# train already has: tconst, primaryTitle, originalTitle, startYear, endYear,
+#                    runtimeMinutes, numVotes, label (train only)
+# title_basics also has primaryTitle, originalTitle, startYear, endYear,
+#   runtimeMinutes — do NOT include those (duplicates).
+#   Only bring: genres, titleType, isAdult  ← genuinely new columns.
+#
+# title_crew.directors / title_crew.writers are raw comma-separated nconst
+#   strings (e.g. "nm0001234,nm5678").  They are NOT included here because:
+#   a) they aren't useful as ML features in raw form, and
+#   b) richer aggregated person metadata comes from the M:M aggs below.
+#
+# No 'key' needed — auto-detected from shared ID columns via DuckDB DESCRIBE.
+# Tables whose key doesn't exist in the base are skipped with a warning.
 ONE_TO_ONE_JOINS = {
     "title_basics": {
         "cols": ["genres", "titleType", "isAdult"],
     },
-    "title_crew": {
-        "cols": ["directors", "writers"],
-    },
+    # title_crew intentionally omitted — raw director/writer ID strings
+    # are superseded by the aggregated person metadata in MANY_TO_MANY_AGGS.
 }
 
 # ── Editable: aggregation specs for many-to-many edge tables ─────────────────

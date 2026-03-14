@@ -22,10 +22,14 @@ class DTypeEnforcer:
             FROM {table} WHERE {q} IS NOT NULL
         """).fetchone()
 
-        if total == 0 or numeric / total < 0.5:
+        if total == 0:
             return None
+        # Check boolean first — "True"/"False" strings are not numeric,
+        # so the numeric gate must come after.
         if boolean / total > 0.95:
             return "BOOLEAN"
+        if numeric / total < 0.5:
+            return None
         return "INTEGER" if whole / total > 0.9 else "DOUBLE"
 
     def _infer_bigint(self, con: duckdb.DuckDBPyConnection, table: str, col: str) -> str | None:
