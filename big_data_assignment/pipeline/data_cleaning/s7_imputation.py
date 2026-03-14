@@ -19,6 +19,9 @@ from sklearn.impute import IterativeImputer
 # Numeric columns to impute.  Only applied if the column exists in the table.
 _IMPUTE_COLS: tuple[str, ...] = ("startYear", "runtimeMinutes", "numVotes")
 
+# Columns that must be integers after imputation (MICE produces floats).
+_ROUND_TO_INT: frozenset[str] = frozenset({"startYear", "runtimeMinutes"})
+
 _NUMERIC_TYPES = ("INTEGER", "BIGINT", "DOUBLE", "FLOAT", "HUGEINT", "DECIMAL")
 
 
@@ -71,6 +74,11 @@ class MICEImputer:
 
         imputed_arr = self._imputer.transform(df)
         df_imputed  = pd.DataFrame(imputed_arr, columns=present)
+
+        # Round integer-valued columns — MICE produces floats (e.g. 1996.222)
+        for col in present:
+            if col in _ROUND_TO_INT:
+                df_imputed[col] = df_imputed[col].round().astype("Int64")
 
         # Register the imputed columns as a temp table, then join back on rowid
         tmp = f"_mice_imputed_{suffix or table.replace('-', '_')}"

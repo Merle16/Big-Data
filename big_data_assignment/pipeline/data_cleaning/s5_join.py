@@ -158,12 +158,18 @@ class JoinBuilder:
             agg_view = self._create_m2m_agg(con, stem, spec)
             key      = spec["key"]
             alias    = f"m_{spec['agg_prefix']}"
+            p        = spec["agg_prefix"]
             agg_cols = [
                 r[0] for r in con.execute(f"DESCRIBE {agg_view}").fetchall()
                 if r[0] != key
             ]
             for col in agg_cols:
-                select.append(f'{alias}."{col}"')
+                # COALESCE counts to 0 — a movie with no directors/writers
+                # gets NULL from the LEFT JOIN, but 0 is the correct value.
+                if col in (f"{p}_count",):
+                    select.append(f'COALESCE({alias}."{col}", 0) AS "{col}"')
+                else:
+                    select.append(f'{alias}."{col}"')
             joins.append(f'LEFT JOIN {agg_view} AS {alias} ON b."{key}" = {alias}."{key}"')
 
         sql = f"SELECT {', '.join(select)} FROM {base} AS b {' '.join(joins)}"

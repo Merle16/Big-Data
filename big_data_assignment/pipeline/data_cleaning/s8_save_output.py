@@ -27,8 +27,12 @@ def save_parquet(con: duckdb.DuckDBPyConnection, view: str, path: Path) -> Path:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
+    # Drop pipeline-internal columns that are not useful as ML features:
+    #   __fp_*  — fingerprint helpers from s3 standardization
+    #   dir_ids / wri_ids — raw comma-separated nconst strings
+    _DROP = {"dir_ids", "wri_ids"}
     all_cols = [r[0] for r in con.execute(f"DESCRIBE {view}").fetchall()]
-    keep = [f'"{c}"' for c in all_cols if not c.startswith("__fp_")]
+    keep = [f'"{c}"' for c in all_cols if not c.startswith("__fp_") and c not in _DROP]
     con.execute(f"COPY (SELECT {', '.join(keep)} FROM {view}) TO '{path}' (FORMAT PARQUET)")
 
     n = con.execute(f"SELECT COUNT(*) FROM '{path}'").fetchone()[0]
