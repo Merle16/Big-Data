@@ -69,8 +69,11 @@ class MICEImputer:
         if not present:
             return table
 
+        # Fetch with a stable key order so row positions match the view below.
+        # Without ORDER BY, DuckDB may return rows in a different order than
+        # ROW_NUMBER() OVER () assigns them, corrupting the join-back.
         sel = ", ".join(f'"{c}"' for c in present)
-        df = con.execute(f"SELECT {sel} FROM {table}").fetchdf()
+        df = con.execute(f'SELECT {sel} FROM {table} ORDER BY "tconst"').fetchdf()
 
         imputed_arr = self._imputer.transform(df)
         df_imputed  = pd.DataFrame(imputed_arr, columns=present)
@@ -85,7 +88,8 @@ class MICEImputer:
         df_imputed["_rowid"] = range(len(df_imputed))
         con.register(tmp, df_imputed)
 
-        # Build a view: original table with imputed columns overwritten
+        # Build a view: original table with imputed columns overwritten.
+        # ORDER BY "tconst" in ROW_NUMBER() must match the fetch order above.
         all_cols = [(r[0], r[1]) for r in con.execute(f"DESCRIBE {table}").fetchall()]
         exprs = []
         for col, dtype in all_cols:
@@ -98,7 +102,7 @@ class MICEImputer:
         con.execute(f"""
             CREATE OR REPLACE VIEW {out} AS
             SELECT {', '.join(exprs)}
-            FROM (SELECT *, ROW_NUMBER() OVER () - 1 AS _rowid FROM {table}) base
+            FROM (SELECT *, ROW_NUMBER() OVER (ORDER BY "tconst") - 1 AS _rowid FROM {table}) base
             JOIN {tmp} ON base._rowid = {tmp}._rowid
         """)
         print(f"[impute] MICE transformed {table} → {out}  cols={present}")

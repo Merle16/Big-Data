@@ -48,10 +48,14 @@ class Deduplicator:
         cols      = [f'"{r[0]}"' for r in con.execute(f"DESCRIBE {table}").fetchall()]
         out       = f"{table}_dedup"
 
+        # Order by ALL columns as tiebreaker so duplicate selection is deterministic.
+        # Ordering by partition key alone leaves the winner undefined when rows are
+        # truly identical (all values equal), varying across runs/DuckDB versions.
+        all_cols_order = ", ".join(cols)
         con.execute(f"""
             CREATE OR REPLACE VIEW {out} AS
             SELECT {', '.join(cols)} FROM (
-                SELECT *, ROW_NUMBER() OVER (PARTITION BY {partition} ORDER BY {partition}) AS _rn
+                SELECT *, ROW_NUMBER() OVER (PARTITION BY {partition} ORDER BY {all_cols_order}) AS _rn
                 FROM {table}
             ) WHERE _rn = 1
         """)
