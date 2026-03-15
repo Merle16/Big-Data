@@ -1,0 +1,4 @@
+split,raw_rows,clean_rows,rows_dropped,rows_dropped_pct,startYear_raw_null,startYear_imputed_rows,runtimeMinutes_raw_null,runtimeMinutes_imputed_rows,numVotes_raw_null,numVotes_imputed_rows
+test_hidden,1086,1086,0,0.0,120,120,1,1,119,119
+train,7959,7959,0,0.0,786,786,13,13,790,790
+validation_hidden,955,955,0,0.0,94,94,2,2,91,91

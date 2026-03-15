@@ -1,0 +1,7 @@
+column,comparison,n_train,n_compare,ks_stat,ks_pval,psi,train_mean,comp_mean,mean_delta,std_delta,status
+startYear,train_vs_val,7959,955,0.0433,0.0795,0.0105,1997.992,1996.56,-1.432,0.475,stable
+startYear,train_vs_test,7959,1086,0.0281,0.4271,0.0195,1997.992,1997.42,-0.572,0.164,stable
+runtimeMinutes,train_vs_val,7959,955,0.0506,0.0246,0.0172,105.682,103.47,-2.212,-2.437,stable
+runtimeMinutes,train_vs_test,7959,1086,0.0376,0.1309,0.0102,105.682,104.746,-0.936,-1.851,stable
+numVotes_log1p,train_vs_val,7959,955,0.0213,0.825,0.0071,8.613,8.568,-0.045,-0.027,stable
+numVotes_log1p,train_vs_test,7959,1086,0.0284,0.4134,0.009,8.613,8.56,-0.053,-0.027,stable

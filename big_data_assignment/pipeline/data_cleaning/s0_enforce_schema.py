@@ -76,8 +76,15 @@ SCHEMA: dict[str, dict] = {
 # ── Lookup helpers ───────────────────────────────────────────────────────────
 
 def _match(table: str) -> dict | None:
+    """Return the SCHEMA spec for *table*, or None if not found.
+
+    Matching rule: exact match OR the table name starts with ``<prefix>_``
+    (the pipeline appends suffixes like ``_no_missing_typed_std_dedup``).
+    Requiring the ``_`` separator prevents ``"train_extended"`` from
+    accidentally matching the ``"train"`` spec.
+    """
     for prefix, spec in SCHEMA.items():
-        if table == prefix or table.startswith(prefix):
+        if table == prefix or table.startswith(prefix + "_"):
             return spec
     return None
 
@@ -95,38 +102,6 @@ def get_id_cols(table: str) -> tuple[str, ...]:
 def get_drop_cols(table: str) -> tuple[str, ...]:
     spec = _match(table)
     return spec.get("drop_cols", ()) if spec else ()
-
-
-# ── SQL-based schema application ─────────────────────────────────────────────
-
-def apply(con: duckdb.DuckDBPyConnection, table: str) -> str:
-    """Create a DuckDB VIEW that enforces the declared schema for *table*.
-
-    Uses SQL DESCRIBE to introspect current columns, then builds a SELECT that
-    omits any ``drop_cols`` declared in SCHEMA.  Returns the new view name, or
-    the original table name when nothing needs to be dropped.
-    """
-    spec = _match(table)
-    if spec is None:
-        return table
-
-    drop = set(spec.get("drop_cols", ()))
-    if not drop:
-        return table
-
-    keep = [
-        f'"{r[0]}"'
-        for r in con.execute(f"DESCRIBE {table}").fetchall()
-        if r[0] not in drop
-    ]
-    if not keep:
-        return table
-
-    out = f"{table}_schema"
-    con.execute(
-        f"CREATE OR REPLACE VIEW {out} AS SELECT {', '.join(keep)} FROM {table}"
-    )
-    return out
 
 
 # ── SQL-based schema validation ──────────────────────────────────────────────

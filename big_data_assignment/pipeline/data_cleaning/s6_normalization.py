@@ -23,7 +23,7 @@ class Normalizer:
             q  = f'"{col}"'
             dt = dtype.upper()
             if col in _LOG1P_COLS and any(t in dt for t in _NUMERIC_TYPES):
-                exprs.append(f"LN(1 + {q}) AS {q}")
+                exprs.append(f'LN(1 + {q}) AS "{col}_log1p"')
             else:
                 exprs.append(q)
 

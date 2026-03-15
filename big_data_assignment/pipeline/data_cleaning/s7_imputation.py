@@ -17,12 +17,16 @@ from sklearn.experimental import enable_iterative_imputer  # noqa: F401
 from sklearn.impute import IterativeImputer
 
 # Numeric columns to impute.  Only applied if the column exists in the table.
-_IMPUTE_COLS: tuple[str, ...] = ("startYear", "runtimeMinutes", "numVotes")
+# numVotes_log1p: s6 renames numVotes → numVotes_log1p before imputation runs.
+_IMPUTE_COLS: tuple[str, ...] = ("startYear", "runtimeMinutes", "numVotes_log1p")
 
 # Columns that must be integers after imputation (MICE produces floats).
 _ROUND_TO_INT: frozenset[str] = frozenset({"startYear", "runtimeMinutes"})
 
 _NUMERIC_TYPES = ("INTEGER", "BIGINT", "DOUBLE", "FLOAT", "HUGEINT", "DECIMAL")
+
+# Primary key used to join imputed values back — must exist in every split table.
+_KEY_COL = "tconst"
 
 
 class MICEImputer:
@@ -62,33 +66,33 @@ class MICEImputer:
         if not self._cols_to_impute:
             return table
 
-        # Fetch only the columns to impute
         present = [c for c in self._cols_to_impute if c in {
             r[0] for r in con.execute(f"DESCRIBE {table}").fetchall()
         }]
         if not present:
             return table
 
-        sel = ", ".join(f'"{c}"' for c in present)
+        # Fetch key + impute columns together so we can join back on the primary key.
+        # Using tconst avoids the undefined-order ROW_NUMBER() alignment bug.
+        sel = ", ".join(f'"{c}"' for c in [_KEY_COL] + present)
         df = con.execute(f"SELECT {sel} FROM {table}").fetchdf()
 
-        imputed_arr = self._imputer.transform(df)
+        imputed_arr = self._imputer.transform(df[present])
         df_imputed  = pd.DataFrame(imputed_arr, columns=present)
+        df_imputed[_KEY_COL] = df[_KEY_COL].values
 
         # Round integer-valued columns — MICE produces floats (e.g. 1996.222)
         for col in present:
             if col in _ROUND_TO_INT:
                 df_imputed[col] = df_imputed[col].round().astype("Int64")
 
-        # Register the imputed columns as a temp table, then join back on rowid
         tmp = f"_mice_imputed_{suffix or table.replace('-', '_')}"
-        df_imputed["_rowid"] = range(len(df_imputed))
         con.register(tmp, df_imputed)
 
-        # Build a view: original table with imputed columns overwritten
-        all_cols = [(r[0], r[1]) for r in con.execute(f"DESCRIBE {table}").fetchall()]
+        # Build a view: original table with imputed columns overwritten, joined on tconst.
+        all_cols = [r[0] for r in con.execute(f"DESCRIBE {table}").fetchall()]
         exprs = []
-        for col, dtype in all_cols:
+        for col in all_cols:
             if col in present:
                 exprs.append(f'{tmp}."{col}" AS "{col}"')
             else:
@@ -98,8 +102,8 @@ class MICEImputer:
         con.execute(f"""
             CREATE OR REPLACE VIEW {out} AS
             SELECT {', '.join(exprs)}
-            FROM (SELECT *, ROW_NUMBER() OVER () - 1 AS _rowid FROM {table}) base
-            JOIN {tmp} ON base._rowid = {tmp}._rowid
+            FROM {table} base
+            JOIN {tmp} ON base."{_KEY_COL}" = {tmp}."{_KEY_COL}"
         """)
         print(f"[impute] MICE transformed {table} → {out}  cols={present}")
         return out

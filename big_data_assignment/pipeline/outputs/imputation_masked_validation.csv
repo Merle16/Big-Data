@@ -1,0 +1,4 @@
+column,n_complete,n_masked,tolerance,mice_mae,mice_rmse,mice_within_tol_pct,median_mae,median_rmse,median_within_tol_pct,mean_mae,mean_rmse,mean_within_tol_pct,mice_vs_median_mae_delta,mice_wins_mae,mice_wins_rmse
+startYear,6454,1290,2.0,17.4311,22.1255,4.42,16.0442,23.5866,13.26,17.4675,22.2053,4.65,1.3869,False,True
+runtimeMinutes,6454,1290,10.0,16.3825,23.6902,40.54,16.3217,24.9036,49.38,16.7889,23.9775,38.14,0.0608,False,True
+numVotes_log1p,6454,1290,0.5,1.1237,1.4035,23.26,1.0832,1.4732,28.76,1.1429,1.4274,23.8,0.0405,False,True

@@ -37,8 +37,8 @@ class StringStandardizer:
         for name, fn in [("_normalize", _normalize), ("_fingerprint", _fingerprint)]:
             try:
                 con.create_function(name, fn, [str], str, null_handling="special")
-            except Exception:
-                pass
+            except (duckdb.CatalogException, duckdb.NotImplementedException):
+                pass  # already registered in this connection
 
         skip = set(get_id_cols(table))
         cols = con.execute(f"DESCRIBE {table}").fetchall()

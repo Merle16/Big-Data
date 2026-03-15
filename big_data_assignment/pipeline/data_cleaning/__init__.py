@@ -1,7 +1,7 @@
 """
 Modular DuckDB-based data cleaning pipeline.
 Input:  data/raw/csv/* and data/raw/IMDB_external_csv/*
-Output: data/processed/{train,validation_hidden,test_hidden}_clean.parquet
+Output: pipeline/outputs/cleaning/{train,validation_hidden,test_hidden}_clean.parquet
 
 Pipeline order
 --------------
@@ -20,7 +20,7 @@ from pathlib import Path
 
 import duckdb
 
-from .s0_enforce_schema import get_drop_cols, validate
+from .s0_enforce_schema import get_drop_cols, validate  # apply() removed — drops handled by MissingTokenReplacer
 from .s1_missing import DISGUISED_TOKENS, MissingTokenReplacer
 from .s2_dtypes import DTypeEnforcer
 from .s3_standardization import StringStandardizer
@@ -33,7 +33,7 @@ from .s8_save_output import assert_quality, save_parquet
 _ROOT    = Path(__file__).resolve().parents[2]
 RAW_CSV  = _ROOT / "data" / "raw" / "csv"
 RAW_EXT  = _ROOT / "data" / "raw" / "IMDB_external_csv"
-OUT_DIR  = _ROOT / "data" / "processed"
+OUT_DIR  = _ROOT / "pipeline" / "outputs" / "cleaning"
 
 
 # ── Per-table cleaning (steps 1–4) ───────────────────────────────────────────
@@ -116,14 +116,14 @@ def run_pipeline(out_dir: Path | None = None) -> dict[str, Path]:
     # ── 3. Schema validation (s0 validate) ──────────────────────────────────
 
     print("\n[validate] Running schema checks...")
-    any_issues = False
+    all_issues: list[str] = []
     for tbl, view in cleaned.items():
-        issues = validate(con, view)
-        for msg in issues:
-            print(f"  [WARN] {msg}")
-            any_issues = True
-    if not any_issues:
-        print("  All checks passed.")
+        all_issues.extend(validate(con, view))
+    if all_issues:
+        for msg in all_issues:
+            print(f"  [FAIL] {msg}")
+        raise ValueError("Schema validation failed:\n" + "\n".join(f"  • {m}" for m in all_issues))
+    print("  All checks passed.")
 
     # ── 4. Join + normalize each split (s5, s6) ─────────────────────────────
 
@@ -153,6 +153,12 @@ def run_pipeline(out_dir: Path | None = None) -> dict[str, Path]:
         out_paths[split] = path
 
     con.close()
+
+    # ── 7. Post-pipeline validity checks + figures (s9) ─────────────────────
+    _OUTPUTS_CLEAN = _ROOT / "pipeline" / "outputs" / "cleaning"
+    from .s9_report import run as _s9_run
+    _s9_run(out_paths, RAW_CSV, fig_dir=_OUTPUTS_CLEAN)
+
     return out_paths
 
 

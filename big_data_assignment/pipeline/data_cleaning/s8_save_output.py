@@ -11,11 +11,27 @@ import duckdb
 from .s0_enforce_schema import validate
 
 
+# Columns that must be fully imputed before export.
+_IMPUTED_COLS = ("startYear", "runtimeMinutes", "numVotes_log1p")
+
+
 def assert_quality(con: duckdb.DuckDBPyConnection, table: str) -> None:
-    """Raise ValueError if the cleaned table still has schema violations."""
+    """Raise ValueError if the cleaned table still has schema violations or remaining NULLs."""
     issues = validate(con, table)
     if issues:
         raise ValueError("Quality gate failed:\n" + "\n".join(f"  • {i}" for i in issues))
+
+    existing = {r[0] for r in con.execute(f"DESCRIBE {table}").fetchall()}
+    for col in _IMPUTED_COLS:
+        if col not in existing:
+            continue
+        n_null = con.execute(
+            f'SELECT COUNT(*) FROM {table} WHERE "{col}" IS NULL'
+        ).fetchone()[0]
+        if n_null > 0:
+            raise ValueError(
+                f"Quality gate failed: {n_null} NULL values remain in {col} after imputation"
+            )
 
 
 def save_parquet(con: duckdb.DuckDBPyConnection, view: str, path: Path) -> Path:

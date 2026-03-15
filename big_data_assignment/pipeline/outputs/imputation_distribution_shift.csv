@@ -1,0 +1,4 @@
+column,n_observed,n_imputed,imputed_pct,ks_stat,ks_pval,wasserstein,psi,obs_mean,imp_mean,obs_std,imp_std,mean_delta,status
+startYear,7173,786,9.88,0.5784,0.0,16.6217,6.0289,1997.996,1997.954,21.994,1.224,-0.042,high_shift
+runtimeMinutes,7946,13,0.16,0.4989,0.0016,15.4512,1.6741,105.687,102.462,25.395,2.24,-3.226,high_shift
+numVotes_log1p,7169,790,9.93,0.4974,0.0,0.9713,4.0117,8.611,8.626,1.489,0.291,0.015,high_shift

@@ -1,0 +1,3 @@
+column,titleType,n_observed,n_imputed,ks_stat,ks_pval,plausible,note
+runtimeMinutes,movie,7929,11,0.4984,0.0048,False,suspicious — imputed dist diverges
+startYear,movie,7155,785,0.578,0.0,False,suspicious — imputed dist diverges

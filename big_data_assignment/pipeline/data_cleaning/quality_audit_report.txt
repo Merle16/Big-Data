@@ -1,0 +1,138 @@
+QUALITY AUDIT REPORT  (detect only — no fixes applied)
+Files: ['big_data_assignment/data/raw/csv/train-1.csv', 'big_data_assignment/data/raw/csv/validation_hidden.csv', 'big_data_assignment/data/raw/csv/test_hidden.csv', 'big_data_assignment/data/raw/csv/movie_directors.csv', 'big_data_assignment/data/raw/csv/movie_writers.csv']
+Tables loaded: ['train_1', 'validation_hidden', 'test_hidden', 'movie_directors', 'movie_writers']
+
+========================================================================
+1. SCHEMA DISCOVERY
+========================================================================
+  table                         rows  cols  numeric  text  id  columns
+  ------------------------- --------  ----  -------  ----  --  ----------------------------------------
+  train_1                        963     8        3     4   1  tconst(i), primaryTitle(t), originalTitle(t), startYear(n), endYear(t), runtimeMinutes(n), numVotes(n), label(t)
+  validation_hidden              955     7        3     3   1  tconst(i), primaryTitle(t), originalTitle(t), startYear(n), endYear(t), runtimeMinutes(n), numVotes(n)
+  test_hidden                  1,086     7        3     3   1  tconst(i), primaryTitle(t), originalTitle(t), startYear(n), endYear(t), runtimeMinutes(n), numVotes(n)
+  movie_directors             11,162     2        0     2   0  tconst(t), director(t)
+  movie_writers               22,428     2        0     2   0  tconst(t), writer(t)
+
+  Expected dtype vs inferred dtype  (conflicts only):
+  table                     column                     inferred  content-class   issue
+  ------------------------- ---------------------- ------------  --------------  ----------------------------------------
+  train_1                   startYear                   VARCHAR  numeric         stored VARCHAR but content is numeric → dirty values (e.g. \N) prevent type inference
+  train_1                   runtimeMinutes              VARCHAR  numeric         stored VARCHAR but content is numeric → dirty values (e.g. \N) prevent type inference
+  train_1                   label                       BOOLEAN  text            DuckDB inferred BOOLEAN but classified as text → check encoding
+  validation_hidden         startYear                   VARCHAR  numeric         stored VARCHAR but content is numeric → dirty values (e.g. \N) prevent type inference
+  validation_hidden         runtimeMinutes              VARCHAR  numeric         stored VARCHAR but content is numeric → dirty values (e.g. \N) prevent type inference
+  test_hidden               startYear                   VARCHAR  numeric         stored VARCHAR but content is numeric → dirty values (e.g. \N) prevent type inference
+  test_hidden               runtimeMinutes              VARCHAR  numeric         stored VARCHAR but content is numeric → dirty values (e.g. \N) prevent type inference
+
+========================================================================
+2. KEY / UUID DETECTION
+========================================================================
+  table                     column               kind           prefix   unique%  candidate_key
+  ------------------------- -------------------- -------------- -------- -------  -------------
+  train_1                   tconst               id-like        tt       100.0%  YES
+  train_1                   originalTitle        candidate_key           100.0%  YES
+  validation_hidden         tconst               id-like        tt       100.0%  YES
+  validation_hidden         primaryTitle         candidate_key           100.0%  YES
+  validation_hidden         originalTitle        candidate_key           100.0%  YES
+  test_hidden               tconst               id-like        tt       100.0%  YES
+  test_hidden               primaryTitle         candidate_key            99.9%  YES
+  test_hidden               originalTitle        candidate_key           100.0%  YES
+
+========================================================================
+3. MISSINGNESS
+========================================================================
+  Step 1: NULL rate  (columns with >0 NULLs only)
+  table                     column                      null_n   null%
+  train_1                   originalTitle                  506   52.5%
+  train_1                   numVotes                        89    9.2%
+  validation_hidden         originalTitle                  468   49.0%
+  validation_hidden         numVotes                        91    9.5%
+  test_hidden               originalTitle                  544   50.1%
+  test_hidden               numVotes                       119   11.0%
+
+  Step 2: Disguised missing  (exact encoding; CANDIDATE tokens before hardcoded confirmed)
+  CANDIDATE TOKENS (entropy-detected; review per column) = ["'\\\\N'"]
+    (Note: '\N' = backslash-N, common disguised-missing encoding e.g. IMDB; shown in Python repr)
+  Candidate token appearances:
+    '\\N'                in 7 column(s) [also in confirmed list]: train_1.startYear (94; 9.8%), train_1.endYear (869; 90.2%), validation_hidden.startYear (94; 9.8%), validation_hidden.endYear (861; 90.2%), test_hidden.startYear (120; 11.0%), test_hidden.endYear (966; 89.0%), movie_writers.writer (297; 1.3%)
+  CONFIRMED TOKENS (hardcoded; treated as missing) = ["''", "'N/A'", "'NA'", "'NaN'", "'None'", "'\\\\N'", "'\\\\\\\\N'", "'nan'", "'null'"]
+    (Note: '\N' in the list above = the two-character token backslash-N, common disguised-missing encoding e.g. IMDB)
+  Confirmed token appearances:
+    '\\N'                in 10 column(s): train_1.startYear (94; 9.8%), train_1.endYear (869; 90.2%), train_1.runtimeMinutes (2; 0.2%), validation_hidden.startYear (94; 9.8%), validation_hidden.endYear (861; 90.2%), validation_hidden.runtimeMinutes (2; 0.2%), test_hidden.startYear (120; 11.0%), test_hidden.endYear (966; 89.0%), test_hidden.runtimeMinutes (1; 0.1%), movie_writers.writer (297; 1.3%)
+    '\\\\N'              in 1 column(s): movie_directors.director (2; 0.0%)
+
+  Step 3: Type-mismatch in numeric cols  (non-numeric strings in a numeric column)
+  table                     column                           n       %  examples
+  train_1                   startYear                       94    9.8%  ['\\N']
+  train_1                   runtimeMinutes                   2    0.2%  ['\\N']
+  validation_hidden         startYear                       94    9.8%  ['\\N']
+  validation_hidden         runtimeMinutes                   2    0.2%  ['\\N']
+  test_hidden               startYear                      120   11.0%  ['\\N']
+  test_hidden               runtimeMinutes                   1    0.1%  ['\\N']
+
+========================================================================
+4. NORMALIZATION DETECTION  (NFKD+ASCII; only columns with unnormalized values)
+========================================================================
+  table                     column                      unnorm       %  distinct  strlen
+  train_1                   primaryTitle                   291   30.2%       961  [2,70]
+  train_1                   originalTitle                   96   21.0%       457  [2,57]
+  train_1                   endYear                        869   90.2%        44  [2,4]
+  validation_hidden         primaryTitle                   290   30.4%       955  [1,61]
+  validation_hidden         originalTitle                  103   21.1%       487  [1,58]
+  validation_hidden         endYear                        861   90.2%        49  [2,4]
+  test_hidden               primaryTitle                   323   29.7%     1,085  [1,68]
+  test_hidden               originalTitle                  120   22.1%       542  [1,68]
+  test_hidden               endYear                        966   89.0%        52  [2,4]
+  movie_directors           director                         2    0.0%     7,189  [3,10]
+  movie_writers             writer                         297    1.3%    15,248  [2,10]
+
+========================================================================
+5. ROBUST STATISTICS  (numeric columns; median/MAD resist corrupted values)
+========================================================================
+  table                col                      n        min        max       mean        p50      MAD  out_IQR%  out_MAD%     k5%_Δ    k10%_Δ    k25%_Δ
+  train_1              startYear              869     1919.0     2021.0    1997.66     2006.0     11.0      3.8%     14.5%     -2.26     -3.77     -6.46
+    suspicious: 1919.0 (×1), 1920.0 (×1), 1921.0 (×1), 1924.0 (×1), 1925.0 (×1)
+  train_1              runtimeMinutes         961       50.0      350.0     106.09      100.0     12.0      6.0%     11.7%     +2.02     +3.54     +5.82
+    suspicious: 350.0 (×1), 245.0 (×1), 214.0 (×1), 210.0 (×1), 202.0 (×1)
+  train_1              numVotes               874     1001.0  1180579.0   31362.51     3658.0   2314.5     15.4%     25.6%  +19614.76  +23772.89  +26960.00
+    suspicious: 1180579.0 (×1), 1107891.0 (×1), 993387.0 (×1), 970988.0 (×1), 822486.0 (×1)
+  validation_hidden    startYear              861     1914.0     2021.0    1996.41     2004.0     12.0      4.6%     12.5%     -2.07     -3.91     -6.23
+    suspicious: 1914.0 (×1), 1917.0 (×1), 1919.0 (×1), 1922.0 (×1), 1923.0 (×1)
+  validation_hidden    runtimeMinutes         953       45.0      251.0     103.47       98.0     10.0      8.1%     14.0%     +1.71     +2.76     +4.93
+    suspicious: 251.0 (×1), 238.0 (×1), 217.0 (×1), 216.0 (×1), 197.0 (×1)
+  validation_hidden    numVotes               864     1003.0  1054233.0   26231.36     3391.0   2116.0     15.6%     25.9%  +15856.31  +19369.28  +22065.77
+    suspicious: 1054233.0 (×1), 963644.0 (×1), 770414.0 (×1), 663088.0 (×1), 659788.0 (×1)
+  test_hidden          startYear              966     1924.0     2021.0    1997.38     2005.0     11.0      3.5%     15.3%     -1.97     -3.79     -7.10
+    suspicious: 1924.0 (×3), 1925.0 (×2), 1927.0 (×1), 1928.0 (×2), 1931.0 (×3)
+  test_hidden          runtimeMinutes       1,085       46.0      271.0     104.75       99.0     11.0      5.5%     12.4%     +1.79     +2.92     +4.65
+    suspicious: 271.0 (×1), 217.0 (×1), 210.0 (×1), 206.0 (×1), 191.0 (×1)
+  test_hidden          numVotes               967     1005.0  1750905.0   30276.92     3401.0   2125.0     13.9%     26.2%  +20592.39  +23611.43  +26126.93
+    suspicious: 1750905.0 (×1), 1321304.0 (×1), 1113105.0 (×1), 1076118.0 (×1), 1038523.0 (×1)
+
+========================================================================
+6. FINGERPRINT KEYING (textual deduplication candidates)
+========================================================================
+  table                     column                    groups  top example pairs
+  (no fingerprint collisions found)
+
+========================================================================
+7. DUPLICATES & CANDIDATE KEYS
+========================================================================
+  table                     dup_groups  candidate_key_columns
+  ------------------------- ----------  ----------------------------------------
+  train_1                       0 (OK)  tconst, originalTitle
+  validation_hidden             0 (OK)  tconst, primaryTitle, originalTitle
+  test_hidden                   0 (OK)  tconst, primaryTitle, originalTitle
+  movie_directors               0 (OK)  —
+  movie_writers                 0 (OK)  —
+
+========================================================================
+8. LABEL / CLASS BALANCE
+========================================================================
+  table.column                        value                 n       %
+  train_1.label                       False               450  46.73%
+  train_1.label                       True                513  53.27%
+
+========================================================================
+AUDIT COMPLETE
+========================================================================
