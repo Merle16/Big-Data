@@ -54,19 +54,45 @@ class DTypeEnforcer:
         """Create a typed view. Returns the new view name."""
         cols = con.execute(f"DESCRIBE {table}").fetchall()
         exprs = []
+        cast_cols: dict[str, str] = {}   # col → target type, for post-creation audit
+
         for col, dtype, *_ in cols:
             q, s = f'"{col}"', f'TRIM(CAST("{col}" AS VARCHAR))'
             dt = dtype.upper()
 
             if "VARCHAR" in dt:
                 t = self._infer_varchar(con, table, col)
-                exprs.append(f"TRY_CAST({s} AS {t}) AS {q}" if t else q)
+                if t:
+                    exprs.append(f"TRY_CAST({s} AS {t}) AS {q}")
+                    cast_cols[col] = t
+                else:
+                    exprs.append(q)
             elif "BIGINT" in dt:
                 t = self._infer_bigint(con, table, col)
-                exprs.append(f"CAST({q} AS {t}) AS {q}" if t else q)
+                if t:
+                    # TRY_CAST (not CAST) so the <1% outside range become NULL
+                    # instead of overflowing silently.
+                    exprs.append(f"TRY_CAST({q} AS {t}) AS {q}")
+                    cast_cols[col] = t
+                else:
+                    exprs.append(q)
             else:
                 exprs.append(q)
 
         out = f"{table}_typed"
         con.execute(f"CREATE OR REPLACE VIEW {out} AS SELECT {', '.join(exprs)} FROM {table}")
+
+        # Audit: report any nulls introduced by TRY_CAST that weren't null before.
+        # These are non-missing values that failed to parse — silent data loss.
+        for col, target_type in cast_cols.items():
+            q = f'"{col}"'
+            before = con.execute(f"SELECT COUNT(*) FROM {table} WHERE {q} IS NOT NULL").fetchone()[0]
+            after  = con.execute(f"SELECT COUNT(*) FROM {out}  WHERE {q} IS NOT NULL").fetchone()[0]
+            lost   = before - after
+            if lost > 0:
+                print(
+                    f"  [WARN] s2 TRY_CAST {col} → {target_type}: "
+                    f"{lost} non-null values failed to parse and became NULL"
+                )
+
         return out

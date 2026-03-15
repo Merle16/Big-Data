@@ -74,6 +74,8 @@ def run_pipeline(out_dir: Path | None = None) -> dict[str, Path]:
         CREATE OR REPLACE TABLE train AS
         SELECT * FROM read_csv_auto('{train_glob}', header=True, all_varchar=True, ignore_errors=True)
     """)
+    n_train = con.execute("SELECT COUNT(*) FROM train").fetchone()[0]
+    print(f"[ingest] train:              {n_train:>6,} rows  (ignore_errors=True)")
 
     for name, fname in [
         ("validation_hidden", "validation_hidden.csv"),
@@ -83,6 +85,8 @@ def run_pipeline(out_dir: Path | None = None) -> dict[str, Path]:
             CREATE OR REPLACE TABLE {name} AS
             SELECT * FROM read_csv_auto('{RAW_CSV / fname}', header=True, all_varchar=True, ignore_errors=True)
         """)
+        n = con.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
+        print(f"[ingest] {name:<20} {n:>6,} rows  (ignore_errors=True)")
 
     # IMDB reference tables
     for stem in ("title_basics", "title_crew", "title_principals", "name_basics"):

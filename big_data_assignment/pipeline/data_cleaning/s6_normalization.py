@@ -23,6 +23,16 @@ class Normalizer:
             q  = f'"{col}"'
             dt = dtype.upper()
             if col in _LOG1P_COLS and any(t in dt for t in _NUMERIC_TYPES):
+                # Guard: LN(1+x) is undefined (NULL in DuckDB) for x < -1.
+                # numVotes should never be negative, so warn loudly if it is.
+                neg = con.execute(
+                    f'SELECT COUNT(*) FROM {table} WHERE {q} IS NOT NULL AND {q} < 0'
+                ).fetchone()[0]
+                if neg > 0:
+                    print(
+                        f"  [WARN] s6: {col} has {neg} negative values — "
+                        f"LN(1+x) will produce NULL for x < -1. Check upstream."
+                    )
                 exprs.append(f"LN(1 + {q}) AS {q}")
             else:
                 exprs.append(q)
