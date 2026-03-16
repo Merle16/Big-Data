@@ -28,11 +28,15 @@ env/
 # Jupyter
 .ipynb_checkpoints/
 
-# Model artifacts and logs
+# Model artifacts and logs (pkl files, not source code)
 models/
 artifacts/
 logs/
 predictions/
+
+# Exception: pipeline source code in models/ must be tracked
+!pipeline/models/
+!pipeline/models/*.py
 
 # Processed/intermediate data (keep raw data under version control if needed)
 data/processed/
