@@ -334,16 +334,28 @@ def add_title_group_features(train_df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def add_title_similarity_features(train_df: pd.DataFrame) -> pd.DataFrame:
-    """TF-IDF cosine similarity of each title to hit and non-hit centroids."""
+def add_title_similarity_features(
+    train_df: pd.DataFrame,
+    return_artifacts: bool = False,
+):
+    """TF-IDF cosine similarity of each title to hit and non-hit centroids.
+
+    Parameters
+    ----------
+    return_artifacts : bool
+        When True, also returns (vec, hit_centroid, non_centroid) for later
+        inference on val/test splits.
+    """
     out = train_df.copy()
     title_series = out.get("primaryTitle", pd.Series("", index=out.index)).fillna("").astype(str)
+
+    _zeros = (return_artifacts, None, None, None)
 
     if "label" not in out.columns:
         out["title_sim_to_hit"]     = 0.0
         out["title_sim_to_non_hit"] = 0.0
         out["title_sim_margin"]     = 0.0
-        return out
+        return (out, None, None, None) if return_artifacts else out
 
     y = pd.to_numeric(out["label"], errors="coerce")
     hit_mask = y.eq(1).to_numpy()
@@ -353,7 +365,7 @@ def add_title_similarity_features(train_df: pd.DataFrame) -> pd.DataFrame:
         out["title_sim_to_hit"]     = 0.0
         out["title_sim_to_non_hit"] = 0.0
         out["title_sim_margin"]     = 0.0
-        return out
+        return (out, None, None, None) if return_artifacts else out
 
     vec = TfidfVectorizer(lowercase=True, ngram_range=(1, 2), min_df=2, max_features=5000)
     X = vec.fit_transform(title_series)
@@ -362,7 +374,7 @@ def add_title_similarity_features(train_df: pd.DataFrame) -> pd.DataFrame:
         out["title_sim_to_hit"]     = 0.0
         out["title_sim_to_non_hit"] = 0.0
         out["title_sim_margin"]     = 0.0
-        return out
+        return (out, None, None, None) if return_artifacts else out
 
     hit_centroid = np.asarray(X[hit_mask].mean(axis=0))
     non_centroid = np.asarray(X[non_mask].mean(axis=0))
@@ -372,7 +384,7 @@ def add_title_similarity_features(train_df: pd.DataFrame) -> pd.DataFrame:
     out["title_sim_to_hit"]     = sim_hit
     out["title_sim_to_non_hit"] = sim_non
     out["title_sim_margin"]     = sim_hit - sim_non
-    return out
+    return (out, vec, hit_centroid, non_centroid) if return_artifacts else out
 
 
 def compute_oof_encoding(
@@ -723,14 +735,19 @@ def run(state: dict) -> dict:
         )
         train_feat["canonical_title_hit_rate"] = oof_ct
 
-        # Title similarity
-        train_feat = add_title_similarity_features(train_feat)
+        # Title similarity — keep artifacts for val/test inference
+        train_feat, _tfidf_vec, _hit_cent, _non_cent = add_title_similarity_features(
+            train_feat, return_artifacts=True
+        )
 
-        state["train_feat"]  = train_feat
-        state["dir_lookup"]  = dir_lookup
-        state["dir_gm"]      = dir_gm
-        state["wr_lookup"]   = wr_lookup
-        state["wr_gm"]       = wr_gm
+        state["train_feat"]     = train_feat
+        state["dir_lookup"]     = dir_lookup
+        state["dir_gm"]         = dir_gm
+        state["wr_lookup"]      = wr_lookup
+        state["wr_gm"]          = wr_gm
+        state["tfidf_vec"]      = _tfidf_vec
+        state["hit_centroid"]   = _hit_cent
+        state["non_centroid"]   = _non_cent
     else:
         print("[f1] No label column — skipping OOF encodings.")
         dir_lookup, dir_gm, wr_lookup, wr_gm = {}, 0.0, {}, 0.0

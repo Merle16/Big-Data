@@ -11,8 +11,15 @@ from sklearn.metrics import accuracy_score
 from sklearn.model_selection import train_test_split
 
 from src.data.dataloaders import load_train_data, load_validation_data
-from src.models import baseline_model, logistic_regression, xgboost_model
+from src.models import baseline_model, logistic_regression
 from src.utils.config import load_config, resolve_path_from_config
+
+try:
+    from src.models import xgboost_model
+    _HAS_XGBOOST = xgboost_model is not None
+except ImportError:
+    xgboost_model = None
+    _HAS_XGBOOST = False
 from src.utils.grid_search import expand_model_grid, flatten_model_params
 
 # After run_baselines(), the best model (by validation accuracy) is stored here for make_submission().
@@ -173,9 +180,10 @@ def run_baselines() -> None:
 
     models = {
         "logistic_regression": logistic_regression,
-        "xgboost": xgboost_model,
         "baseline": baseline_model,
     }
+    if _HAS_XGBOOST and xgboost_model is not None:
+        models["xgboost"] = xgboost_model
 
     grid_enabled = config.get("training", {}).get("grid_search", {}).get("enabled", False)
     model_type = config.get("model", {}).get("type", "logistic_regression")
@@ -286,11 +294,13 @@ def make_submission() -> str:
     X_test_hidden_vec = transform(X_test_hidden)
 
     # Predict with the best model
-    module = {
+    _modules = {
         "logistic_regression": logistic_regression,
-        "xgboost": xgboost_model,
         "baseline": baseline_model,
-    }[model_type]
+    }
+    if _HAS_XGBOOST and xgboost_model is not None:
+        _modules["xgboost"] = xgboost_model
+    module = _modules[model_type]
     y_val_pred = module.predict(model, X_val_hidden_vec)
     y_test_pred = module.predict(model, X_test_hidden_vec)
 

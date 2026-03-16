@@ -29,6 +29,8 @@ State keys produced
   final_feat_cols         — list of feature column names retained in the matrix
   cap_bounds              — {col: (lo, hi)} quantile caps fitted on train
   medians                 — {col: median_value} used for median imputation
+  mice_imputer            — fitted IterativeImputer for reuse on test/validation sets
+  mice_cols               — list of columns the MICE imputer was fitted on
 """
 from __future__ import annotations
 
@@ -42,6 +44,8 @@ import matplotlib as mpl
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from sklearn.experimental import enable_iterative_imputer  # noqa: F401
+from sklearn.impute import IterativeImputer
 
 # ── paths ──────────────────────────────────────────────────────────────────────
 PIPELINE = Path(__file__).resolve().parent.parent
@@ -148,6 +152,71 @@ def _apply_imputation(df: pd.DataFrame, medians: Dict[str, float]) -> pd.DataFra
             gm = medians.get(feat, float(out[feat].mean()))
             out[feat] = out[feat].fillna(gm)
     return out
+
+
+# ── MICE imputation ────────────────────────────────────────────────────────────
+
+def _fit_mice(
+    df: pd.DataFrame,
+    feat_cols: List[str],
+    random_state: int = 42,
+    max_iter: int = 10,
+) -> Tuple[pd.DataFrame, IterativeImputer, List[str]]:
+    """
+    Fit an IterativeImputer (MICE) on columns in *feat_cols* that still
+    contain NaN values, then transform the DataFrame in-place.
+
+    Returns
+    -------
+    df_out       : DataFrame with all remaining NaN cells filled
+    imputer      : fitted IterativeImputer (for reuse on test/validation)
+    mice_cols    : ordered list of columns the imputer was fitted on
+    """
+    cols_with_nan = [
+        c for c in feat_cols
+        if c in df.columns and df[c].isna().any()
+    ]
+    if not cols_with_nan:
+        print("[f2] MICE: no remaining NaN values — skipping.")
+        dummy = IterativeImputer(random_state=random_state, max_iter=max_iter)
+        return df, dummy, []
+
+    print(
+        f"[f2] MICE: fitting IterativeImputer on {len(cols_with_nan)} columns "
+        f"({df[cols_with_nan].isna().sum().sum()} NaN cells) ..."
+    )
+    imputer = IterativeImputer(
+        random_state=random_state,
+        max_iter=max_iter,
+        initial_strategy="median",
+        min_value=None,
+        max_value=None,
+    )
+    arr = df[cols_with_nan].to_numpy(dtype=float, na_value=np.nan)
+    arr_imputed = imputer.fit_transform(arr)
+
+    df_out = df.copy()
+    df_out[cols_with_nan] = arr_imputed
+
+    remaining = int(df_out[cols_with_nan].isna().sum().sum())
+    print(f"[f2] MICE: done — remaining NaN={remaining}")
+    return df_out, imputer, cols_with_nan
+
+
+def apply_mice(
+    df: pd.DataFrame,
+    imputer: IterativeImputer,
+    mice_cols: List[str],
+) -> pd.DataFrame:
+    """Apply a pre-fitted MICE imputer to *df* (for test / validation sets)."""
+    if not mice_cols:
+        return df
+    present = [c for c in mice_cols if c in df.columns]
+    arr = df[present].to_numpy(dtype=float, na_value=np.nan)
+    arr_imputed = imputer.transform(arr)
+    df_out = df.copy()
+    df_out[present] = arr_imputed
+    return df_out
 
 
 # ── figures ────────────────────────────────────────────────────────────────────
@@ -380,11 +449,18 @@ def run(state: dict) -> dict:
 
     meta_cols = ["tconst"] + (["label"] if "label" in feat_capped.columns else [])
     available_feat = [c for c in final_feat_cols if c in feat_capped.columns]
-    feat_imputed = _apply_imputation(
+
+    # ── 5a. Per-feature policy imputation ─────────────────────────────────────
+    feat_policy_imputed = _apply_imputation(
         feat_capped[meta_cols + available_feat], medians
     )
 
-    # ── 5. Figures ────────────────────────────────────────────────────────────
+    # ── 5b. MICE for any remaining NaN values ─────────────────────────────────
+    feat_imputed, mice_imputer, mice_cols = _fit_mice(
+        feat_policy_imputed, available_feat
+    )
+
+    # ── 6. Figures ────────────────────────────────────────────────────────────
     print("[f2] Saving figures...")
     _fig_action_summary()
     _fig_endyear_evidence(feat_df)
@@ -392,7 +468,7 @@ def run(state: dict) -> dict:
     _fig_capping(feat_df, "numVotes_log1p",  "10_capping_numVotes_log1p.png")
     _fig_nan_audit(feat_df, feat_imputed, available_feat)
 
-    # ── 6. Save outputs ───────────────────────────────────────────────────────
+    # ── 7. Save outputs ───────────────────────────────────────────────────────
     feat_imputed.to_parquet(OUT_FEAT / "features_train_prepped.parquet", index=False)
     feat_imputed.to_csv(OUT_FEAT / "features_train_prepped.csv", index=False)
 
@@ -408,6 +484,8 @@ def run(state: dict) -> dict:
     state["final_feat_cols"]        = available_feat
     state["cap_bounds"]             = cap_bounds
     state["medians"]                = medians
+    state["mice_imputer"]           = mice_imputer
+    state["mice_cols"]              = mice_cols
     return state
 
 

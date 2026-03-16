@@ -66,6 +66,8 @@ def run_feature_pipeline(out_dir: Optional[Path] = None) -> dict:
           final_feat_cols         — list of retained feature columns (f2)
           cap_bounds              — quantile cap bounds fitted on train (f2)
           medians                 — imputation medians fitted on train (f2)
+          mice_imputer            — fitted IterativeImputer (MICE) for test/val (f2)
+          mice_cols               — columns the MICE imputer was fitted on (f2)
           feature_goodness        — per-feature quality diagnostics DataFrame (f3)
           feat_cols_quality       — list of evaluated feature columns (f3)
     """
@@ -92,8 +94,11 @@ def run_feature_pipeline(out_dir: Optional[Path] = None) -> dict:
     return state
 
 
+apply_mice = f2.apply_mice
+
 __all__ = [
     "run_feature_pipeline",
+    "apply_mice",
     "FEATURE_MOTIVATION",
     "FEATURE_GROUPS",
     "DISPOSITION_REGISTRY",

@@ -45,3 +45,4 @@ data/processed/
 members/*/experiments/
 members/*/.ipynb_checkpoints/
 
+requirements.txt
