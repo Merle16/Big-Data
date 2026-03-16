@@ -49,6 +49,14 @@ OUT_FEAT = PIPELINE / "outputs" / "features"
 FIG_DIR  = OUT_FEAT
 OUT_FEAT.mkdir(parents=True, exist_ok=True)
 
+# ── config ─────────────────────────────────────────────────────────────────────
+try:
+    from ..config import CFG as _CFG
+except ImportError:
+    import yaml as _yaml
+    _cfg_path = PIPELINE.parent / "config.yaml"
+    _CFG: dict = _yaml.safe_load(_cfg_path.read_text(encoding="utf-8")) if _cfg_path.exists() else {}
+
 # ── style ──────────────────────────────────────────────────────────────────────
 BG  = "#0a0a0a"
 CRD = "#111111"
@@ -79,7 +87,7 @@ mpl.rcParams.update({
     "font.family":       "sans-serif",
 })
 
-SEED = 42
+SEED = _CFG.get("global", {}).get("seed", 42)
 
 _SKIP_META = {"tconst", "label", "primaryTitle", "canonical_title"}
 
@@ -204,18 +212,29 @@ def compute_goodness(
     psi_max = psi_max if not pd.isna(psi_max) else 1.0
     psi_r   = (-df["psi_train_vs_val"].fillna(psi_max)).rank(pct=True)
     miss_r  = (-df["missing_rate_train"].fillna(1.0)).rank(pct=True)
+    _fq      = _CFG.get("feature_quality", {})
+    _gw      = _fq.get("goodness_weights", {})
+    _W_AUC   = float(_gw.get("auc",      0.35))
+    _W_MI    = float(_gw.get("mi",       0.25))
+    _W_SP    = float(_gw.get("spearman", 0.20))
+    _W_PSI   = float(_gw.get("psi",      0.10))
+    _W_MISS  = float(_gw.get("missing",  0.10))
+    _KEEP_TH = float(_fq.get("goodness_keep_threshold", 0.60))
+    _AUC_DROP = float(_fq.get("auc_drop_threshold",     0.52))
+    _PSI_REV  = float(_fq.get("psi", {}).get("review_threshold", 0.20))
+
     df["goodness_score"] = (
-        0.35 * auc_r + 0.25 * mi_r + 0.20 * sp_r + 0.10 * psi_r + 0.10 * miss_r
+        _W_AUC * auc_r + _W_MI * mi_r + _W_SP * sp_r + _W_PSI * psi_r + _W_MISS * miss_r
     )
 
     median_good = float(df["goodness_score"].median())
 
     # Status assignment
     df["status"] = "review"
-    df.loc[df["psi_train_vs_val"].fillna(0) > 0.2, "status"] = "review"
-    df.loc[df["goodness_score"] >= 0.60, "status"] = "keep"
+    df.loc[df["psi_train_vs_val"].fillna(0) > _PSI_REV, "status"] = "review"
+    df.loc[df["goodness_score"] >= _KEEP_TH, "status"] = "keep"
     df.loc[
-        (df["univariate_auc_val"].fillna(0.5) < 0.52)
+        (df["univariate_auc_val"].fillna(0.5) < _AUC_DROP)
         & (df["mutual_info"].fillna(0) < df["mutual_info"].median())
         & (df["goodness_score"] < median_good),
         "status",
@@ -435,7 +454,7 @@ def run(state: dict) -> dict:
     # ── 3. Internal 80/20 stratified split ────────────────────────────────────
     train_idx, val_idx = train_test_split(
         feat_df.index,
-        test_size=0.20,
+        test_size=float(_CFG.get("global", {}).get("test_size", 0.20)),
         random_state=SEED,
         stratify=feat_df["label"].astype(int),
     )

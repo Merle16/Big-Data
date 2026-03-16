@@ -54,6 +54,14 @@ OUT_FEAT = PIPELINE / "outputs" / "features"
 FIG_DIR  = OUT_FEAT
 OUT_FEAT.mkdir(parents=True, exist_ok=True)
 
+# ── config ─────────────────────────────────────────────────────────────────────
+try:
+    from ..config import CFG as _CFG
+except ImportError:
+    import yaml as _yaml
+    _cfg_path = PIPELINE.parent / "config.yaml"
+    _CFG: dict = _yaml.safe_load(_cfg_path.read_text(encoding="utf-8")) if _cfg_path.exists() else {}
+
 # ── style ──────────────────────────────────────────────────────────────────────
 BG  = "#0a0a0a"
 CRD = "#111111"
@@ -159,8 +167,9 @@ def _apply_imputation(df: pd.DataFrame, medians: Dict[str, float]) -> pd.DataFra
 def _fit_mice(
     df: pd.DataFrame,
     feat_cols: List[str],
-    random_state: int = 42,
-    max_iter: int = 10,
+    random_state: int = _CFG.get("global", {}).get("seed", 42),
+    max_iter: int = _CFG.get("imputation", {}).get("mice", {}).get("max_iter", 10),
+    tol: float = _CFG.get("imputation", {}).get("mice", {}).get("tol", 1e-3),
 ) -> Tuple[pd.DataFrame, IterativeImputer, List[str]]:
     """
     Fit an IterativeImputer (MICE) on columns in *feat_cols* that still
@@ -178,16 +187,18 @@ def _fit_mice(
     ]
     if not cols_with_nan:
         print("[f2] MICE: no remaining NaN values — skipping.")
-        dummy = IterativeImputer(random_state=random_state, max_iter=max_iter)
+        dummy = IterativeImputer(random_state=random_state, max_iter=max_iter, tol=tol)
         return df, dummy, []
 
     print(
         f"[f2] MICE: fitting IterativeImputer on {len(cols_with_nan)} columns "
-        f"({df[cols_with_nan].isna().sum().sum()} NaN cells) ..."
+        f"({df[cols_with_nan].isna().sum().sum()} NaN cells) "
+        f"[max_iter={max_iter}, tol={tol}] ..."
     )
     imputer = IterativeImputer(
         random_state=random_state,
         max_iter=max_iter,
+        tol=tol,
         initial_strategy="median",
         min_value=None,
         max_value=None,
@@ -430,13 +441,16 @@ def run(state: dict) -> dict:
     final_feat_cols = [c for c in all_candidate if c not in drop_feats]
 
     # ── 3. Capping (fit on train only) ────────────────────────────────────────
+    _caps      = _CFG.get("feature_engineering", {}).get("quantile_caps", {})
+    _Q_LOW     = float(_caps.get("q_low",  0.01))
+    _Q_HIGH    = float(_caps.get("q_high", 0.99))
     cap_bounds: Dict[str, Tuple[float, float]] = {}
     feat_capped = feat_df.copy()
     for col in CAP_COLS:
         if col in feat_capped.columns:
             vals = pd.to_numeric(feat_capped[col], errors="coerce").dropna()
             if len(vals) > 0:
-                lo, hi = float(vals.quantile(0.01)), float(vals.quantile(0.99))
+                lo, hi = float(vals.quantile(_Q_LOW)), float(vals.quantile(_Q_HIGH))
                 cap_bounds[col] = (lo, hi)
                 feat_capped[col] = pd.to_numeric(feat_capped[col], errors="coerce").clip(lo, hi)
 

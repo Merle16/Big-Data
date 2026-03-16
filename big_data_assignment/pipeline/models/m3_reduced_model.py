@@ -42,8 +42,16 @@ OUT_MODELS = PIPELINE / "outputs" / "models"
 MODEL_FIG_DIR = OUT_MODELS
 OUT_MODELS.mkdir(parents=True, exist_ok=True)
 
+# ── config ─────────────────────────────────────────────────────────────────────
+try:
+    from ..config import CFG as _CFG
+except ImportError:
+    import yaml as _yaml
+    _cfg_path = ROOT / "config.yaml"
+    _CFG: dict = _yaml.safe_load(_cfg_path.read_text(encoding="utf-8")) if _cfg_path.exists() else {}
+
 # ── constants ──────────────────────────────────────────────────────────────────
-SEED = 42
+SEED = _CFG.get("global", {}).get("seed", 42)
 BG  = "#0a0a0a"
 CRD = "#111111"
 BDR = "#252525"
@@ -103,7 +111,9 @@ def _prep_splits(feat_df: pd.DataFrame, feat_cols: list):
         med = float(feat_df[col].median()) if feat_df[col].notna().sum() > 0 else 0.0
         feat_df[col] = feat_df[col].fillna(med)
     train_idx, val_idx = train_test_split(
-        feat_df.index, test_size=0.20, random_state=SEED,
+        feat_df.index,
+        test_size=float(_CFG.get("global", {}).get("test_size", 0.20)),
+        random_state=SEED,
         stratify=feat_df["label"].astype(int),
     )
     X_tr = feat_df.loc[train_idx, feat_cols]
@@ -121,10 +131,16 @@ def _fit_eval(X_tr: pd.DataFrame, y_tr: pd.Series,
     """Fit a fresh model on feat_cols subset and return validation AUC."""
     X_tr_sub = X_tr[feat_cols]
     X_vl_sub = X_vl[feat_cols]
+    _rcfg = _CFG.get("models", {}).get("reduced", {})
+    _lcfg = _CFG.get("models", {}).get("logistic", {})
     if model_type == "xgboost" and HAS_XGB:
         m = XGBClassifier(
-            n_estimators=300, max_depth=5, learning_rate=0.05,
-            subsample=0.85, colsample_bytree=0.85, random_state=SEED,
+            n_estimators=int(_rcfg.get("n_estimators", 300)),
+            max_depth=int(_rcfg.get("max_depth", 5)),
+            learning_rate=float(_rcfg.get("learning_rate", 0.05)),
+            subsample=float(_rcfg.get("subsample", 0.85)),
+            colsample_bytree=float(_rcfg.get("colsample_bytree", 0.85)),
+            random_state=SEED,
             objective="binary:logistic", eval_metric="logloss",
             tree_method="hist", n_jobs=4, verbosity=0,
         )
@@ -134,7 +150,11 @@ def _fit_eval(X_tr: pd.DataFrame, y_tr: pd.Series,
         sc = StandardScaler()
         X_tr_sc = sc.fit_transform(X_tr_sub)
         X_vl_sc = sc.transform(X_vl_sub)
-        m = LogisticRegression(max_iter=2000, random_state=SEED)
+        m = LogisticRegression(
+            max_iter=int(_lcfg.get("max_iter", 2000)),
+            C=float(_lcfg.get("C", 1.0)),
+            random_state=SEED,
+        )
         m.fit(X_tr_sc, y_tr.astype(int))
         probs = m.predict_proba(X_vl_sc)[:, 1]
     return float(roc_auc_score(y_vl.astype(int), probs))
@@ -157,7 +177,8 @@ def _fig_ablation(X_tr: pd.DataFrame, y_tr: pd.Series,
     AUC vs number of features kept (greedy top-down by diagnostic rank).
     Saves 15_ablation_curve.png and returns (best_n, best_auc, aucs).
     """
-    steps = list(range(1, min(len(feat_cols_ranked) + 1, 26)))
+    _abl_max = int(_CFG.get("models", {}).get("reduced", {}).get("ablation_max_features", 25))
+    steps = list(range(1, min(len(feat_cols_ranked) + 1, _abl_max + 1)))
     aucs  = []
     for n in steps:
         sub = feat_cols_ranked[:n]
@@ -314,7 +335,8 @@ def run(state: dict) -> dict:
                 if diag_df.loc[diag_df["feature"] == f, "status"].values[0] != "drop_candidate"
             ]
         else:
-            keep_set = feats_ranked[:max(5, len(feats_ranked) // 2)]
+            _ks_min  = int(_CFG.get("models", {}).get("reduced", {}).get("keep_set_min", 5))
+            keep_set = feats_ranked[:max(_ks_min, len(feats_ranked) // 2)]
     else:
         feats_ranked = feat_cols
         keep_set     = feat_cols
@@ -333,10 +355,16 @@ def run(state: dict) -> dict:
 
     # ── retrain reduced model ──────────────────────────────────────────────────
     print(f"[m3_reduced_model] Retraining reduced model on {len(final_keep)} features...")
+    _rcfg2 = _CFG.get("models", {}).get("reduced", {})
+    _lcfg2 = _CFG.get("models", {}).get("logistic", {})
     if active_type == "xgboost" and HAS_XGB:
         red_model = XGBClassifier(
-            n_estimators=300, max_depth=5, learning_rate=0.05,
-            subsample=0.85, colsample_bytree=0.85, random_state=SEED,
+            n_estimators=int(_rcfg2.get("n_estimators", 300)),
+            max_depth=int(_rcfg2.get("max_depth", 5)),
+            learning_rate=float(_rcfg2.get("learning_rate", 0.05)),
+            subsample=float(_rcfg2.get("subsample", 0.85)),
+            colsample_bytree=float(_rcfg2.get("colsample_bytree", 0.85)),
+            random_state=SEED,
             objective="binary:logistic", eval_metric="logloss",
             tree_method="hist", n_jobs=4, verbosity=0,
         )
@@ -347,7 +375,11 @@ def run(state: dict) -> dict:
         red_scaler = StandardScaler()
         X_tr_red   = red_scaler.fit_transform(X_tr[final_keep])
         X_vl_red   = red_scaler.transform(X_vl[final_keep])
-        red_model  = LogisticRegression(max_iter=2000, random_state=SEED)
+        red_model  = LogisticRegression(
+            max_iter=int(_lcfg2.get("max_iter", 2000)),
+            C=float(_lcfg2.get("C", 1.0)),
+            random_state=SEED,
+        )
         red_model.fit(X_tr_red, y_tr.astype(int))
         red_probs  = red_model.predict_proba(X_vl_red)[:, 1]
 

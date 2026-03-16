@@ -28,6 +28,14 @@ import pandas as pd
 from sklearn.experimental import enable_iterative_imputer  # noqa: F401
 from sklearn.impute import IterativeImputer
 
+# ── config ─────────────────────────────────────────────────────────────────────
+def _load_cfg() -> dict:
+    import yaml
+    _p = Path(__file__).resolve().parents[2] / "config.yaml"
+    return yaml.safe_load(_p.read_text(encoding="utf-8")) if _p.exists() else {}
+
+_CFG = _load_cfg()
+
 from .schema import get_id_cols, get_key, validate
 
 
@@ -456,8 +464,13 @@ class MICEImputer:
     All other columns pass through unchanged.
     """
 
-    def __init__(self, max_iter: int = 10, random_state: int = 42) -> None:
-        self._imputer = IterativeImputer(max_iter=max_iter, random_state=random_state)
+    def __init__(
+        self,
+        max_iter: int = _CFG.get("imputation", {}).get("mice", {}).get("max_iter", 10),
+        tol: float    = _CFG.get("imputation", {}).get("mice", {}).get("tol", 1e-3),
+        random_state: int = _CFG.get("imputation", {}).get("mice", {}).get("random_state", 42),
+    ) -> None:
+        self._imputer = IterativeImputer(max_iter=max_iter, tol=tol, random_state=random_state)
         self._cols_to_impute: list[str] = []
 
     def _numeric_impute_cols(self, con: duckdb.DuckDBPyConnection, table: str) -> list[str]:

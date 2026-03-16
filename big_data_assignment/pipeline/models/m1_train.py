@@ -52,8 +52,16 @@ OUT_MODELS = PIPELINE / "outputs" / "models"
 MODEL_FIG_DIR = OUT_MODELS
 OUT_MODELS.mkdir(parents=True, exist_ok=True)
 
+# ── config ─────────────────────────────────────────────────────────────────────
+try:
+    from ..config import CFG as _CFG
+except ImportError:
+    import yaml as _yaml
+    _cfg_path = ROOT / "config.yaml"
+    _CFG: dict = _yaml.safe_load(_cfg_path.read_text(encoding="utf-8")) if _cfg_path.exists() else {}
+
 # ── constants ──────────────────────────────────────────────────────────────────
-SEED = 42
+SEED = _CFG.get("global", {}).get("seed", 42)
 BG  = "#0a0a0a"
 CRD = "#111111"
 BDR = "#252525"
@@ -113,7 +121,9 @@ def _prep_splits(feat_df: pd.DataFrame, feat_cols: list):
         med = float(feat_df[col].median()) if feat_df[col].notna().sum() > 0 else 0.0
         feat_df[col] = feat_df[col].fillna(med)
     train_idx, val_idx = train_test_split(
-        feat_df.index, test_size=0.20, random_state=SEED,
+        feat_df.index,
+        test_size=float(_CFG.get("global", {}).get("test_size", 0.20)),
+        random_state=SEED,
         stratify=feat_df["label"].astype(int),
     )
     X_tr = feat_df.loc[train_idx, feat_cols]
@@ -385,7 +395,12 @@ def run(state: dict) -> dict:
 
     # ── logistic regression ────────────────────────────────────────────────────
     print("[m1_train] Fitting logistic regression...")
-    log_model = LogisticRegression(max_iter=2000, random_state=SEED)
+    _lcfg     = _CFG.get("models", {}).get("logistic", {})
+    log_model = LogisticRegression(
+        max_iter=int(_lcfg.get("max_iter", 2000)),
+        C=float(_lcfg.get("C", 1.0)),
+        random_state=SEED,
+    )
     log_model.fit(train_Xs, y_tr)
     log_probs = log_model.predict_proba(val_Xs)[:, 1]
     log_auc   = float(roc_auc_score(y_vl, log_probs))
@@ -395,9 +410,13 @@ def run(state: dict) -> dict:
     xgb_model = None; xgb_probs = None; xgb_auc = None; xgb_acc = None
     if HAS_XGB:
         print("[m1_train] Fitting XGBoost...")
+        _xcfg     = _CFG.get("models", {}).get("xgboost", {})
         xgb_model = XGBClassifier(
-            n_estimators=500, max_depth=5, learning_rate=0.05,
-            subsample=0.85, colsample_bytree=0.85,
+            n_estimators=int(_xcfg.get("n_estimators", 500)),
+            max_depth=int(_xcfg.get("max_depth", 5)),
+            learning_rate=float(_xcfg.get("learning_rate", 0.05)),
+            subsample=float(_xcfg.get("subsample", 0.85)),
+            colsample_bytree=float(_xcfg.get("colsample_bytree", 0.85)),
             objective="binary:logistic", eval_metric="logloss",
             tree_method="hist", n_jobs=4, random_state=SEED, verbosity=0,
         )

@@ -45,8 +45,18 @@ OUT_MODELS = PIPELINE / "outputs" / "models"
 MODEL_FIG_DIR = OUT_MODELS
 OUT_MODELS.mkdir(parents=True, exist_ok=True)
 
+# ── config ─────────────────────────────────────────────────────────────────────
+try:
+    from ..config import CFG as _CFG
+except ImportError:
+    import yaml as _yaml
+    _cfg_path = ROOT / "config.yaml"
+    _CFG: dict = _yaml.safe_load(_cfg_path.read_text(encoding="utf-8")) if _cfg_path.exists() else {}
+
 # ── constants ──────────────────────────────────────────────────────────────────
-SEED = 42
+SEED = _CFG.get("global", {}).get("seed", 42)
+_PERM_THRESHOLD  = float(_CFG.get("diagnostics", {}).get("permutation_importance_threshold", 0.005))
+_OVERFIT_GAP     = float(_CFG.get("diagnostics", {}).get("overfitting_gap_threshold", 0.05))
 BG  = "#0a0a0a"
 CRD = "#111111"
 BDR = "#252525"
@@ -106,7 +116,9 @@ def _prep_splits(feat_df: pd.DataFrame, feat_cols: list):
         med = float(feat_df[col].median()) if feat_df[col].notna().sum() > 0 else 0.0
         feat_df[col] = feat_df[col].fillna(med)
     train_idx, val_idx = train_test_split(
-        feat_df.index, test_size=0.20, random_state=SEED,
+        feat_df.index,
+        test_size=float(_CFG.get("global", {}).get("test_size", 0.20)),
+        random_state=SEED,
         stratify=feat_df["label"].astype(int),
     )
     X_tr = feat_df.loc[train_idx, feat_cols]
@@ -174,7 +186,7 @@ def _save(fig, fname: str) -> None:
 
 def _fig_perm_drop(perm_df: pd.DataFrame, model_name: str) -> None:
     top    = perm_df.head(20).sort_values("perm_auc_drop", ascending=True)
-    colors = [GRN if v > 0.005 else ORG if v > 0 else RED for v in top["perm_auc_drop"]]
+    colors = [GRN if v > _PERM_THRESHOLD else ORG if v > 0 else RED for v in top["perm_auc_drop"]]
     n_feat = len(top)
     fig, ax = plt.subplots(figsize=(14, max(6, n_feat * 0.55)))
     bars = ax.barh(top["feature"], top["perm_auc_drop"], color=colors, alpha=0.88, edgecolor="none")
@@ -280,7 +292,7 @@ def _fig_auc_gap(log_train_auc: float, log_val_auc: float,
                 ha="center", va="bottom", fontsize=9, color=TXT, fontweight="bold")
         gap = tv - v
         ax.text(x[i], 0.52, f"gap={gap:.4f}", ha="center",
-                color=RED if gap > 0.05 else GRN, fontsize=9, fontweight="bold")
+                color=RED if gap > _OVERFIT_GAP else GRN, fontsize=9, fontweight="bold")
     fig.tight_layout(pad=2.5)
     _save(fig, "13_auc_gap.png")
 
@@ -411,8 +423,10 @@ def run(state: dict) -> dict:
         "status",
     ] = "drop_candidate"
     diag_df.loc[
-        (diag_df["perm_auc_drop"] >= 0.002) |
-        (diag_df["goodness_score"].fillna(0) >= 0.60),
+        (diag_df["perm_auc_drop"] >= _PERM_THRESHOLD) |
+        (diag_df["goodness_score"].fillna(0) >= float(
+            _CFG.get("feature_quality", {}).get("goodness_keep_threshold", 0.60)
+        )),
         "status",
     ] = "keep"
 

@@ -35,8 +35,8 @@ logs/
 predictions/
 
 # Exception: pipeline source code in models/ must be tracked
-!pipeline/models/
-!pipeline/models/*.py
+!big_data_assignment/pipeline/models/
+!big_data_assignment/pipeline/models/*.py
 
 # Processed/intermediate data (keep raw data under version control if needed)
 data/processed/

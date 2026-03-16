@@ -42,8 +42,16 @@ OUT_MODELS = PIPELINE / "outputs" / "models"
 MODEL_FIG_DIR  = OUT_MODELS
 OUT_MODELS.mkdir(parents=True, exist_ok=True)
 
+# ── config ─────────────────────────────────────────────────────────────────────
+try:
+    from ..config import CFG as _CFG
+except ImportError:
+    import yaml as _yaml
+    _cfg_path = ROOT / "config.yaml"
+    _CFG: dict = _yaml.safe_load(_cfg_path.read_text(encoding="utf-8")) if _cfg_path.exists() else {}
+
 # ── constants ──────────────────────────────────────────────────────────────────
-SEED = 42
+SEED = _CFG.get("global", {}).get("seed", 42)
 BG  = "#0a0a0a"
 CRD = "#111111"
 BDR = "#252525"
@@ -199,6 +207,24 @@ def run(state: dict) -> dict:
             feat_cols  = art.get("feat_cols")
             best_model = art.get("best_model", "logistic")
 
+    # ── load Youden threshold ──────────────────────────────────────────────────
+    youden_threshold = state.get(
+        "youden_threshold",
+        float(_CFG.get("classification", {}).get("fallback_threshold", 0.5)),
+    )
+    thr_fp = OUT_MODELS / "threshold_analysis.csv"
+    if thr_fp.exists():
+        try:
+            thr_df = pd.read_csv(thr_fp)
+            _model_key = "xgboost" if (best_model or "").lower() == "xgboost" else "logistic"
+            _row = thr_df[(thr_df["model"] == _model_key) & (thr_df["rule"] == "youden_opt")]
+            if not _row.empty:
+                youden_threshold = float(_row["youden_threshold"].iloc[0])
+                print(f"[m4_export] Using Youden threshold={youden_threshold:.4f} "
+                      f"(model={_model_key})")
+        except Exception as _e:
+            print(f"[m4_export] Could not load threshold_analysis.csv: {_e} — using 0.5")
+
     if keep_set is None:
         ks_fp = OUT_MODELS / "keep_set_features.txt"
         if ks_fp.exists():
@@ -227,7 +253,9 @@ def run(state: dict) -> dict:
             feat_df["label"] = label_num.loc[label_num.notna()].astype(int).to_numpy()
 
             train_idx, val_idx = train_test_split(
-                feat_df.index, test_size=0.20, random_state=SEED,
+                feat_df.index,
+                test_size=float(_CFG.get("global", {}).get("test_size", 0.20)),
+                random_state=SEED,
                 stratify=feat_df["label"].astype(int),
             )
             X_vl = feat_df.loc[val_idx, feat_cols]
@@ -252,7 +280,7 @@ def run(state: dict) -> dict:
 
             val_pred_df = feat_df.loc[val_idx, ["tconst"]].copy()
             val_pred_df["predicted_prob"]  = val_probs
-            val_pred_df["predicted_label"] = (val_probs >= 0.5).astype(int)
+            val_pred_df["predicted_label"] = (val_probs >= youden_threshold).astype(int)
             val_pred_df["true_label"]      = y_vl.values
             val_pred_df.to_csv(OUT_MODELS / "predictions_val.csv", index=False)
             print(f"[m4_export] Saved predictions_val.csv  "
@@ -297,7 +325,7 @@ def run(state: dict) -> dict:
             _probs  = _active_model.predict_proba(_X)[:, 1]
             _out_df = _df[["tconst"]].copy()
             _out_df["predicted_prob"]  = _probs
-            _out_df["predicted_label"] = (_probs >= 0.5).astype(int)
+            _out_df["predicted_label"] = (_probs >= youden_threshold).astype(int)
             _out_df.to_csv(OUT_MODELS / _out_name, index=False)
             print(f"[m4_export] Saved {_out_name}  ({len(_out_df)} rows)")
 
@@ -337,10 +365,11 @@ def run(state: dict) -> dict:
     n_artifacts = len(manifest)
     print(
         f"\n[m4_export] Pipeline complete.\n"
-        f"  Artifacts : {n_artifacts} files in {OUT_MODELS}\n"
-        f"  Best model: {best_model}\n"
-        f"  Val AUC   : {val_auc:.4f}\n"
-        f"  Keep-set  : {len(keep_set) if keep_set else '—'} features"
+        f"  Artifacts  : {n_artifacts} files in {OUT_MODELS}\n"
+        f"  Best model : {best_model}\n"
+        f"  Val AUC    : {val_auc:.4f}\n"
+        f"  Threshold  : {youden_threshold:.4f} (Youden's J)\n"
+        f"  Keep-set   : {len(keep_set) if keep_set else '—'} features"
     )
 
     state.update({

@@ -1,0 +1,71 @@
+# =============================================================================
+# Pipeline configuration — all tunable parameters in one place.
+# Values marked [JUSTIFIED] were set based on prior data analysis or domain
+# standards and should only be changed with a clear reason.
+# =============================================================================
+
+# ── Global ────────────────────────────────────────────────────────────────────
+global:
+  seed: 42           # [JUSTIFIED] reproducibility convention
+  test_size: 0.20    # [JUSTIFIED] standard 80/20 train/val split
+
+# ── Imputation ────────────────────────────────────────────────────────────────
+imputation:
+  mice:
+    max_iter: 10      # max rounds; stops early if tol is reached
+    tol: 0.001        # convergence tolerance (sklearn IterativeImputer default)
+    random_state: 42  # mirrors global seed
+
+# ── Feature Engineering ───────────────────────────────────────────────────────
+feature_engineering:
+  quantile_caps:
+    q_low: 0.01    # lower Winsorisation bound
+    q_high: 0.99   # upper Winsorisation bound
+
+# ── Feature Quality ───────────────────────────────────────────────────────────
+feature_quality:
+  psi:
+    n_bins: 10
+    warn_threshold: 0.10    # [JUSTIFIED] industry standard: minor distribution shift
+    drop_threshold: 0.25    # [JUSTIFIED] industry standard: significant shift
+    review_threshold: 0.20  # flag as "review" above this
+  auc_drop_threshold: 0.52      # [JUSTIFIED] marginally above random (0.50)
+  goodness_keep_threshold: 0.60 # composite score minimum to keep a feature
+  goodness_weights:             # [JUSTIFIED] must sum to 1.0
+    auc: 0.35
+    mi: 0.25
+    spearman: 0.20
+    psi: 0.10
+    missing: 0.10
+
+# ── Models ────────────────────────────────────────────────────────────────────
+models:
+  logistic:
+    max_iter: 2000   # [JUSTIFIED] high ceiling to ensure convergence on scaled features
+    C: 1.0
+
+  xgboost:
+    n_estimators: 500
+    max_depth: 5
+    learning_rate: 0.05
+    subsample: 0.85
+    colsample_bytree: 0.85
+
+  reduced:
+    n_estimators: 300
+    max_depth: 5
+    learning_rate: 0.05
+    subsample: 0.85
+    colsample_bytree: 0.85
+    ablation_max_features: 25  # max features to sweep in ablation curve
+    keep_set_min: 5            # minimum features to retain if ablation returns nothing
+
+# ── Diagnostics ───────────────────────────────────────────────────────────────
+diagnostics:
+  permutation_importance_threshold: 0.005  # AUC drop below this = unimportant feature
+  overfitting_gap_threshold: 0.05          # train-val AUC gap above this = overfit
+
+# ── Classification ────────────────────────────────────────────────────────────
+classification:
+  fallback_threshold: 0.5  # used only if threshold_analysis.csv is missing;
+                            # overridden at runtime by Youden's J
