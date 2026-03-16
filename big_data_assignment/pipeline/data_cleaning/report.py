@@ -7,7 +7,7 @@ to <out_dir>/pipeline_figures/.
 Called automatically from __init__.run_pipeline() after all Parquets are
 written.  Can also be called standalone:
 
-    from pipeline.data_cleaning.s9_report import run
+    from pipeline.data_cleaning.report import run
     run(out_paths, raw_csv_dir)
 """
 from __future__ import annotations
@@ -16,10 +16,10 @@ import matplotlib.pyplot as plt
 import pandas as pd
 from pathlib import Path
 
-from . import figures as figs
-from . import imputation_audit as imp_audit
-from . import join_audit as jn_audit
-from .s1_missing import DISGUISED_TOKENS
+from .utils import figures as figs
+from .utils.audits import run_imputation as imp_audit_run
+from .utils.audits import run_join as jn_audit_run
+from .steps import DISGUISED_TOKENS
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -314,7 +314,7 @@ def run(
     clean_train = clean_splits.get("train")
     if raw_train is not None and clean_train is not None:
         print("\n[s9] Running imputation audit …")
-        imp_audit.run(
+        imp_audit_run(
             clean_train=clean_train,
             raw_train=raw_train,
             fig_dir=fig_dir,
@@ -323,7 +323,7 @@ def run(
 
     # ── Join / fanout audit (figs 16–18) ──────────────────────────────────────
     print("\n[s9] Running join/fanout audit …")
-    jn_audit.run(
+    jn_audit_run(
         raw_splits=raw_splits,
         clean_splits=clean_splits,
         fig_dir=fig_dir,

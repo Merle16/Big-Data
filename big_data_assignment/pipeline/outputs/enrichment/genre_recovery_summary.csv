@@ -1,0 +1,4 @@
+field,missing_rows,direct_recovered_rows,direct_recovered_pct,center_recovered_rows,center_recovered_pct,combined_recovered_rows,combined_recovered_pct,recommended_use
+startYear,0,0,0.0,0,0.0,0,0.0,direct_tconst
+runtimeMinutes,0,0,0.0,0,0.0,0,0.0,direct_tconst
+numVotes,0,0,0.0,0,0.0,0,0.0,direct_tconst_with_snapshot_caution

@@ -1,0 +1,4 @@
+field,fill_source,fill_available_rows,fill_available_pct,comparable_rows,material_delta_rows,material_delta_pct,median_abs_delta,p90_abs_delta,threshold,unit,note
+startYear,genre_fill_startYear,5958,74.86,5958,539,9.05,0.0,1.0,2.0,years,Genre fill agrees within ±2.0 years for 91.0% of comparable rows.
+runtimeMinutes,genre_fill_runtimeMinutes,5958,74.86,5958,66,1.11,0.0,0.0,10.0,minutes,Genre fill agrees within ±10.0 minutes for 98.9% of comparable rows.
+numVotes_log1p,genre_fill_numVotes,5958,74.86,5958,5958,100.0,4268.774,67968.36,0.5,log1p units,Genre fill agrees within ±0.5 log1p units for 0.0% of comparable rows.

@@ -81,7 +81,7 @@ mpl.rcParams.update({
     "legend.edgecolor":  "#252525",
 })
 
-_ROOT      = Path(__file__).resolve().parents[1]
+_ROOT      = Path(__file__).resolve().parents[2]
 _CLEAN_DIR = _ROOT / "pipeline" / "outputs" / "cleaning"
 _GENRE_DIR = _ROOT / "data" / "Movies_by_Genre"
 _OUT_DIR   = _ROOT / "pipeline" / "outputs" / "enrichment"

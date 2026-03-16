@@ -72,10 +72,10 @@ except ImportError:
     _HAS_SCIPY = False
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-_ROOT      = Path(__file__).resolve().parents[1]
+_ROOT      = Path(__file__).resolve().parents[2]
 _DATA      = _ROOT / "data"
-_CLEAN_DIR = Path(__file__).resolve().parent / "outputs" / "cleaning"
-_OUT_DIR   = Path(__file__).resolve().parent / "outputs" / "enrichment_rt_oscar"
+_CLEAN_DIR = _ROOT / "pipeline" / "outputs" / "cleaning"
+_OUT_DIR   = _ROOT / "pipeline" / "outputs" / "enrichment_rt_oscar"
 _RT_PATH   = _DATA / "Rotten Tomatoes Movies.csv"
 _OSCAR_PATH = _DATA / "the_oscar_award.csv"
 

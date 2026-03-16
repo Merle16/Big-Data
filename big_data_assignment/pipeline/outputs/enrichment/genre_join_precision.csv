@@ -1,0 +1,2 @@
+strategy,matched_movies,year_comparable_rows,year_consistent_pct,runtime_comparable_rows,runtime_consistent_pct,suspicious_matches,suspicious_pct,estimated_precision_floor,note
+direct_tconst,5958,5958,90.95,5954,99.38,5,0.08,99.92,Low suspicious rate → join is trustworthy.

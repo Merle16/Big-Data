@@ -1,0 +1,4 @@
+field,comparison_rows,exact_match_pct,median_abs_diff,correlation,within_1_year_pct,note,within_5_min_pct,within_10pct_pct
+startYear,5958,89.96,0.0,0.9499,90.55,Direct external values align closely enough to act as credible fill candidates.,,
+runtimeMinutes,5954,95.15,0.0,0.9901,,Direct external values align closely enough to act as credible fill candidates.,97.92,
+numVotes,0,,,,,Column 'numVotes' not present in input data.,,

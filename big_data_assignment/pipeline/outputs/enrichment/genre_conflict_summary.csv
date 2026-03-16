@@ -1,0 +1,10 @@
+metric,value,detail
+raw_rows,368300,Rows across all genre CSV files.
+unique_tconst,243197,Unique IMDb title IDs in the external catalog.
+multi_source_movies,83549,Movies appearing in more than one genre source file.
+title_conflict_movies,304,Same IMDb ID with multiple normalized titles.
+year_conflict_movies,11,Same IMDb ID with more than one external year value.
+runtime_conflict_movies,44,Same IMDb ID with more than one runtime value.
+votes_conflict_movies,11385,Same IMDb ID with more than one vote snapshot.
+rating_conflict_movies,1038,Same IMDb ID with more than one rating snapshot.
+multi_token_movies,159100,Movies with more than one genre token after normalization.

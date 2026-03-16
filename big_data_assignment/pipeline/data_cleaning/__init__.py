@@ -5,30 +5,29 @@ Output: pipeline/outputs/cleaning/{train,validation_hidden,test_hidden}_clean.pa
 
 Pipeline order
 --------------
-s0. s0_enforce_schema.py  — single source of truth: keys, IDs, UUID regex, drop cols
-s1. s1_missing.py         — replace disguised missing tokens (e.g. "\\N") with NULL
-s2. s2_dtypes.py          — cast all columns to correct types
-s3. s3_standardization.py — NFKD Unicode; string & categorical standardization
-s4. s4_deduplication.py   — drop duplicate rows by key (from schema)
-s5. s5_join.py            — schema-specific joins (1:1 + aggregated M:1 with person metadata)
-s6. s6_normalization.py   — log1p transform for heavy-tailed numerics (numVotes)
-s7. s7_imputation.py      — median imputation for remaining missing values
-s8. s8_save_output.py     — quality gate assertions + export to parquet
+  schema.py  — single source of truth: keys, IDs, UUID regex, drop cols
+  steps.py   — s1 MissingTokenReplacer  → s2 DTypeEnforcer → s3 StringStandardizer
+             → s4 Deduplicator → s5 JoinBuilder → s6 Normalizer
+             → s7 MICEImputer  → s8 assert_quality / save_parquet
+  report.py  — post-pipeline validity checks + figures (calls utils/)
+  utils/     — figures.py · audits.py · quality_report.py
 """
 
 from pathlib import Path
 
 import duckdb
 
-from .s0_enforce_schema import get_drop_cols, validate  # apply() removed — drops handled by MissingTokenReplacer
-from .s1_missing import DISGUISED_TOKENS, MissingTokenReplacer
-from .s2_dtypes import DTypeEnforcer
-from .s3_standardization import StringStandardizer
-from .s4_deduplication import Deduplicator
-from .s5_join import JoinBuilder
-from .s6_normalization import Normalizer
-from .s7_imputation import MICEImputer
-from .s8_save_output import assert_quality, save_parquet
+from .schema import get_drop_cols, validate
+from .steps import (
+    DISGUISED_TOKENS, MissingTokenReplacer,
+    DTypeEnforcer,
+    StringStandardizer,
+    Deduplicator,
+    JoinBuilder,
+    Normalizer,
+    MICEImputer,
+    assert_quality, save_parquet,
+)
 
 _ROOT    = Path(__file__).resolve().parents[2]
 RAW_CSV  = _ROOT / "data" / "raw" / "csv"
@@ -156,7 +155,7 @@ def run_pipeline(out_dir: Path | None = None) -> dict[str, Path]:
 
     # ── 7. Post-pipeline validity checks + figures (s9) ─────────────────────
     _OUTPUTS_CLEAN = _ROOT / "pipeline" / "outputs" / "cleaning"
-    from .s9_report import run as _s9_run
+    from .report import run as _s9_run
     _s9_run(out_paths, RAW_CSV, fig_dir=_OUTPUTS_CLEAN)
 
     return out_paths

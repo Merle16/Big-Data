@@ -1,0 +1,5 @@
+check,n_flagged,total,flag_pct,severity,note
+isAdult=1 AND animation_genre,0,7959,0.0,ok,Adult-rated animation; may be legitimate but worth reviewing.
+runtime<20min AND no short/animation/documentary genre,0,7959,0.0,ok,Short runtime without short/animation/doc genre tag may be miscategorised.
+genre_label_vs_imdb_genres_overlap,20,5958,0.34,ok,99.7% of matched movies share ≥1 genre token with IMDB genres field.
+startYear_vs_genre_year_delta>5,494,5958,8.291,warn,Large year discrepancy between IMDB and external genre catalog.

@@ -676,70 +676,7 @@ h4.sub-header {
   <div class="phase-header" id="exec-summary"><span class="phase-pill pill-model">Overview</span><span class="phase-title">Executive Summary</span></div><p class="section-objective">This report covers the full IMDB binary hit-prediction pipeline across three phases. Each figure is accompanied by its objective, interpretation guidance, the result for this run, the acceptance threshold and its rationale, the implication of the result, and a recommended action. All hard-gate checks passed. Warnings are structural or expected and are documented below.</p><div class="exec-grid"><div class="exec-card"><div class="exec-card-title">Phase 1 · Data Cleaning</div><div class="exec-row"><span class="exec-dot dot-pass"></span>0 NaN remaining after MICE imputation (all splits)</div><div class="exec-row"><span class="exec-dot dot-pass"></span>100% MICE invariant — observed values unchanged</div><div class="exec-row"><span class="exec-dot dot-pass"></span>0 fanout duplicates · 0 rows dropped</div><div class="exec-row"><span class="exec-dot dot-pass"></span>Label balance 50.1 / 49.9 — no resampling needed</div><div class="exec-row"><span class="exec-dot dot-warn"></span>death_year join coverage 25–33% (structural)</div><div class="exec-row"><span class="exec-dot dot-warn"></span>MICE MAE slightly above median baseline (small margin)</div><div class="exec-row"><span class="exec-dot dot-warn"></span>Conditional KS fails for 'movie' titleType</div></div><div class="exec-card"><div class="exec-card-title">Phase 2 · Feature Engineering</div><div class="exec-row"><span class="exec-dot dot-pass"></span>21 features with keep status (goodness ≥ 0.60)</div><div class="exec-row"><span class="exec-dot dot-warn"></span>18 features under review</div><div class="exec-row"><span class="exec-dot dot-warn"></span>22 drop-candidate features</div><div class="exec-row"><span class="exec-dot dot-pass"></span>0 NaN in final feature matrix</div><div class="exec-row"><span class="exec-dot dot-pass"></span>OOF target encoding — no leakage</div><div class="exec-row"><span class="exec-dot dot-pass"></span>Top: writer_hit_rate, director_hit_rate, title_sim_margin</div></div><div class="exec-card"><div class="exec-card-title">Phase 3 · Model Training</div><div class="exec-row"><span class="exec-dot dot-pass"></span>Best model: Xgboost · val AUC = 0.9596</div><div class="exec-row"><span class="exec-dot dot-pass"></span>Logistic baseline val AUC = 0.9460</div><div class="exec-row"><span class="exec-dot dot-pass"></span>Reduced model (22 features) AUC = 0.9012 (+0.0031)</div><div class="exec-row"><span class="exec-dot dot-pass"></span>XGBoost outperforms logistic by 4.6 AUC points</div><div class="exec-row"><span class="exec-dot dot-warn"></span>Review calibration and AUC gap figures</div></div></div>
   <div class="phase-header" id="cleaning"><span class="phase-pill pill-clean">Phase 1</span><span class="phase-title">Data Cleaning</span></div><p class="section-objective">The cleaning pipeline standardises schema, resolves disguised missing tokens (\N, "NA", "unknown"), deduplicates, joins six auxiliary IMDB tables, log-normalises numVotes, and imputes three numeric columns (startYear, runtimeMinutes, numVotes_log1p) via MICE with BayesianRidge. This section validates every transformation: row conservation, imputation quality, join integrity, distribution stability, and label balance. A failed hard-gate prevents downstream stages from running.</p>
 <h3 id="cleaning-checks">Validity Check Summary</h3>
-<details open><summary>Validity checks &nbsp;&middot;&nbsp; ✓ 31 passed &nbsp;&middot;&nbsp; ⚠ 7 warnings &nbsp;&middot;&nbsp; ✗ 2 failures</summary><pre>
-Row count conservation
-──────────────────────
-<span class="ok">  ✓ row count [train]:  raw=7,959  →  cleaned=7,959</span>
-<span class="ok">  ✓ row count [validation_hidden]:  raw=955  →  cleaned=955</span>
-<span class="ok">  ✓ row count [test_hidden]:  raw=1,086  →  cleaned=1,086</span>
-
-Remaining NaN after imputation
-──────────────────────────────
-<span class="ok">  ✓ remaining NaN after imputation [train] startYear: 0</span>
-<span class="ok">  ✓ remaining NaN after imputation [train] runtimeMinutes: 0</span>
-<span class="ok">  ✓ remaining NaN after imputation [train] numVotes_log1p: 0</span>
-<span class="ok">  ✓ remaining NaN after imputation [validation_hidden] startYear: 0</span>
-<span class="ok">  ✓ remaining NaN after imputation [validation_hidden] runtimeMinutes: 0</span>
-<span class="ok">  ✓ remaining NaN after imputation [validation_hidden] numVotes_log1p: 0</span>
-<span class="ok">  ✓ remaining NaN after imputation [test_hidden] startYear: 0</span>
-<span class="ok">  ✓ remaining NaN after imputation [test_hidden] runtimeMinutes: 0</span>
-<span class="ok">  ✓ remaining NaN after imputation [test_hidden] numVotes_log1p: 0</span>
-
-Post-imputation domain bounds
-─────────────────────────────
-<span class="ok">  ✓ domain bounds [train] startYear: 0 violation(s)</span>
-<span class="ok">  ✓ domain bounds [train] runtimeMinutes: 0 violation(s)</span>
-<span class="ok">  ✓ domain bounds [train] numVotes_log1p: 0 violation(s)</span>
-<span class="ok">  ✓ domain bounds [validation_hidden] startYear: 0 violation(s)</span>
-<span class="ok">  ✓ domain bounds [validation_hidden] runtimeMinutes: 0 violation(s)</span>
-<span class="ok">  ✓ domain bounds [validation_hidden] numVotes_log1p: 0 violation(s)</span>
-<span class="ok">  ✓ domain bounds [test_hidden] startYear: 0 violation(s)</span>
-<span class="ok">  ✓ domain bounds [test_hidden] runtimeMinutes: 0 violation(s)</span>
-<span class="ok">  ✓ domain bounds [test_hidden] numVotes_log1p: 0 violation(s)</span>
-
-MICE invariant
-──────────────
-<span class="ok">  ✓ MICE invariant [startYear]: 100.0% of non-missing values preserved</span>
-<span class="ok">  ✓ MICE invariant [runtimeMinutes]: 100.0% of non-missing values preserved</span>
-
-Missingness stability
-─────────────────────
-<span class="ok">  ✓ missingness stability [startYear]: drift=1.2pp  (train=9.9%  val=9.8%  test=11.0%)</span>
-<span class="ok">  ✓ missingness stability [runtimeMinutes]: drift=0.1pp  (train=0.2%  val=0.2%  test=0.1%)</span>
-
-Outlier counts (3xIQR, train)
-─────────────────────────────
-<span class="warn">  ⚠ outliers 3×IQR [train] startYear: n_below=8  n_above=0  total=8 (0.10%)  bounds=[1922.0, 2083.0]</span>
-<span class="warn">  ⚠ outliers 3×IQR [train] runtimeMinutes: n_below=0  n_above=53  total=53 (0.67%)  bounds=[15.0, 190.0]</span>
-<span class="warn">  ⚠ outliers 3×IQR [train] numVotes_log1p: n_below=0  n_above=8  total=8 (0.10%)  bounds=[2.5, 14.3]</span>
-
-Join coverage
-─────────────
-<span class="ok">  ✓ join coverage [genres]: 99.9%</span>
-<span class="ok">  ✓ join coverage [titleType]: 100.0%</span>
-<span class="ok">  ✓ join coverage [isAdult]: 100.0%</span>
-<span class="ok">  ✓ join coverage [dir_count]: 100.0%</span>
-<span class="warn">  ⚠ join coverage [dir_avg_birth_year]: 74.9%  ← coverage below 90%</span>
-<span class="warn">  ⚠ join coverage [dir_min_birth_year]: 74.9%  ← coverage below 90%</span>
-<span class="fail">  ✗ join coverage [dir_avg_death_year]: 25.2%  ← low coverage; check JOIN key or source table</span>
-<span class="ok">  ✓ join coverage [wri_count]: 100.0%</span>
-<span class="warn">  ⚠ join coverage [wri_avg_birth_year]: 73.6%  ← coverage below 90%</span>
-<span class="warn">  ⚠ join coverage [wri_min_birth_year]: 73.6%  ← coverage below 90%</span>
-<span class="fail">  ✗ join coverage [wri_avg_death_year]: 32.7%  ← low coverage; check JOIN key or source table</span>
-
-Label balance
-─────────────
-<span class="ok">  ✓ label balance (train): {True: 0.5013192612137203, False: 0.49868073878627966}  minority=49.9%</span></pre></details>
+<details open><summary>Validity checks — could not run</summary><pre><span class="warn">Could not run validity checks: No module named 'pipeline.reporting.data_cleaning'</span></pre></details>
 <h3 id="cleaning-kpis">Split Row Counts</h3>
 <div class="kpi-row"><div class="kpi"><div class="val">7,959</div><div class="lbl">train</div></div><div class="kpi"><div class="val">955</div><div class="lbl">validation hidden</div></div><div class="kpi"><div class="val">1,086</div><div class="lbl">test hidden</div></div></div>
 <h4 class="sub-header" id="missingness">Missingness &amp; Imputation Overview</h4>

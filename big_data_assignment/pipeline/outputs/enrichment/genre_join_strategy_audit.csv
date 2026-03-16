@@ -1,0 +1,4 @@
+strategy,matched_movies,coverage_pct,ambiguous_movies,decision,reason
+direct_tconst,5958,74.86,0,use,"External files already provide IMDb title IDs; this is the clean, auditable key."
+title_year_fallback,14,0.18,1,reject,Adds negligible coverage and introduces title collisions.
+title_year_runtime_fallback,0,0.0,0,reject,Too strict to add meaningful safe coverage after ID matching.

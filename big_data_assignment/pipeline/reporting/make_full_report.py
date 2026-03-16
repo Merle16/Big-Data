@@ -36,7 +36,7 @@ import pandas as pd
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 
-_ROOT       = Path(__file__).resolve().parents[1]   # big_data_assignment/
+_ROOT       = Path(__file__).resolve().parents[2]   # big_data_assignment/
 _PROC       = _ROOT / "pipeline" / "outputs" / "cleaning"  # clean parquets (read-only)
 _RAW_CSV    = _ROOT / "data" / "raw" / "csv"
 _OUTPUTS    = _ROOT / "pipeline" / "outputs"
