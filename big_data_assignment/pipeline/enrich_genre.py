@@ -480,9 +480,18 @@ def build_movies_with_genres(movies: pd.DataFrame, genre_agg: pd.DataFrame, cent
 def build_field_alignment(movies_with_genres: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for spec in FIELD_SPECS:
-        field    = spec["field"]
+        field     = spec["field"]
         indicator = spec["indicator"]
-        direct   = spec["direct"]
+        direct    = spec["direct"]
+        if field not in movies_with_genres.columns:
+            rows.append({
+                "field": field, "comparison_rows": 0,
+                "exact_match_pct": np.nan,
+                spec["tolerance_label"]: np.nan,
+                "median_abs_diff": np.nan, "correlation": np.nan,
+                "note": f"Column {field!r} not present in input data.",
+            })
+            continue
         sub = movies_with_genres[
             (movies_with_genres[indicator] == 0)
             & movies_with_genres[direct].notna()
@@ -549,7 +558,7 @@ def build_recovery_summary(movies_with_genres: pd.DataFrame) -> pd.DataFrame:
 
 
 def build_fill_candidates(movies_with_genres: pd.DataFrame) -> pd.DataFrame:
-    cols = [
+    _wanted = [
         "tconst", "primaryTitle", "split", "genre_labels", "genre_match_flag",
         "genre_source_file_count",
         "startYear_was_missing", "genre_year_direct", "genre_center_year",
@@ -560,17 +569,21 @@ def build_fill_candidates(movies_with_genres: pd.DataFrame) -> pd.DataFrame:
         "genre_fill_numVotes", "genre_fill_numVotes_source",
         "genre_rating_direct", "genre_gross_direct",
     ]
-    keep = movies_with_genres[
+    cols = [c for c in _wanted if c in movies_with_genres.columns]
+    mask = (
         (movies_with_genres["startYear_was_missing"] == 1)
         | (movies_with_genres["runtimeMinutes_was_missing"] == 1)
         | (movies_with_genres["numVotes_was_missing"] == 1)
-    ].copy()
-    keep = keep[
+    )
+    keep = movies_with_genres[mask].copy()
+    fill_mask = (
         keep["genre_fill_startYear"].notna()
         | keep["genre_fill_runtimeMinutes"].notna()
         | keep["genre_fill_numVotes"].notna()
-    ]
-    return keep[cols].sort_values(["split", "tconst"]).reset_index(drop=True)
+    )
+    keep = keep[fill_mask]
+    sort_cols = [c for c in ["split", "tconst"] if c in keep.columns]
+    return keep[cols].sort_values(sort_cols).reset_index(drop=True)
 
 
 def build_top_genres(tokens: pd.DataFrame, movies: pd.DataFrame) -> pd.DataFrame:
@@ -1136,6 +1149,12 @@ def run(state: dict, genre_dir: Path | None = None, out_dir: Path | None = None)
         movies = pd.read_parquet(parquet)
         print(f"[enrich_genre] Loaded {parquet.name}  shape={movies.shape}")
 
+    # Ensure FIELD_SPECS indicator columns exist (post-imputation parquets drop them)
+    for _col in ("startYear_was_missing", "runtimeMinutes_was_missing", "numVotes_was_missing"):
+        if _col not in movies.columns:
+            movies = movies.copy()
+            movies[_col] = 0
+
     artifacts = analyze(movies, genre_dir)
     write_outputs(artifacts, out_dir)
     state = _attach_state(state, artifacts)
@@ -1145,6 +1164,27 @@ def run(state: dict, genre_dir: Path | None = None, out_dir: Path | None = None)
     coverage = matched / len(mwg) * 100 if len(mwg) else 0.0
     print(f"[enrich_genre] Matched {matched:,} / {len(mwg):,} rows ({coverage:.1f}% coverage)")
     print(f"[enrich_genre] Outputs → {out_dir}")
+
+    # ── Apply genre join to all splits and write enriched parquets back ───────
+    genre_agg = artifacts["genre_agg"]
+    centers   = artifacts["genre_centers"]
+    for split_name in ["train", "validation_hidden", "test_hidden"]:
+        parquet_path = _CLEAN_DIR / f"{split_name}_clean.parquet"
+        if not parquet_path.exists():
+            print(f"[enrich_genre] WARNING: {parquet_path.name} not found — skipping")
+            continue
+        if split_name == "train":
+            enriched = mwg  # already computed
+        else:
+            split_df = pd.read_parquet(parquet_path)
+            enriched = build_movies_with_genres(split_df.copy(), genre_agg, centers)
+        enriched.to_parquet(parquet_path, index=False)
+        print(
+            f"[enrich_genre] Saved enriched {split_name}_clean.parquet  "
+            f"shape={enriched.shape}  "
+            f"matched={int(enriched['genre_match_flag'].sum()):,}/{len(enriched):,}"
+        )
+
     return state
 
 

@@ -735,6 +735,74 @@ def run(state: dict) -> dict:
         print("[f1] No label column — skipping OOF encodings.")
         dir_lookup, dir_gm, wr_lookup, wr_gm = {}, 0.0, {}, 0.0
 
+    # ── 6b. Genre features (only when enrichment parquet was written) ─────────
+    _GENRE_TOKENS = [
+        "action", "comedy", "drama", "thriller", "horror", "romance",
+        "adventure", "animation", "crime", "fantasy", "sci-fi", "mystery",
+        "biography", "documentary",
+    ]
+    genre_feat_cols: List[str] = []
+    if "genre_match_flag" in train_feat.columns:
+        train_feat["genre_match_flag"] = (
+            pd.to_numeric(train_feat["genre_match_flag"], errors="coerce").fillna(0).astype(int)
+        )
+        genre_feat_cols.append("genre_match_flag")
+
+        if "genre_token_count" in train_feat.columns:
+            train_feat["genre_token_count"] = (
+                pd.to_numeric(train_feat["genre_token_count"], errors="coerce").fillna(0)
+            )
+            genre_feat_cols.append("genre_token_count")
+
+        for _gc in ["genre_center_year", "genre_center_runtime", "genre_center_rating"]:
+            if _gc in train_feat.columns:
+                train_feat[_gc] = pd.to_numeric(train_feat[_gc], errors="coerce")
+                genre_feat_cols.append(_gc)
+
+        if "genre_labels" in train_feat.columns:
+            labels_lower = train_feat["genre_labels"].fillna("").str.lower()
+            for _tok in _GENRE_TOKENS:
+                _col = f"is_{_tok.replace('-', '_')}"
+                train_feat[_col] = labels_lower.str.contains(_tok, regex=False).astype(int)
+                genre_feat_cols.append(_col)
+
+        print(
+            f"[f1] Genre features added: {len(genre_feat_cols)}  "
+            f"({', '.join(genre_feat_cols[:6])}{'…' if len(genre_feat_cols) > 6 else ''})"
+        )
+
+    # ── 6c. RT + Oscar features (only when enrichment parquet was written) ────
+    rt_oscar_feat_cols: List[str] = []
+    if "rt_match_flag" in train_feat.columns:
+        for _col, _fill in [
+            ("rt_match_flag",          0),
+            ("rt_tomatometer_rating",  np.nan),
+            ("rt_audience_rating",     np.nan),
+            ("rt_tomatometer_count",   np.nan),
+            ("rt_audience_count",      np.nan),
+            ("rt_certified_fresh",     0),
+            ("rt_high",                np.nan),
+            ("rt_score_gap",           np.nan),
+            ("rt_score_gap_abs",       np.nan),
+            ("rt_popularity_log1p",    0),
+        ]:
+            if _col not in train_feat.columns:
+                continue
+            train_feat[_col] = pd.to_numeric(train_feat[_col], errors="coerce").fillna(_fill)
+            rt_oscar_feat_cols.append(_col)
+
+        for _col in ["oscar_was_nominated", "oscar_was_winner",
+                     "oscar_num_nominations", "oscar_num_wins"]:
+            if _col not in train_feat.columns:
+                continue
+            train_feat[_col] = pd.to_numeric(train_feat[_col], errors="coerce").fillna(0).astype(int)
+            rt_oscar_feat_cols.append(_col)
+
+        print(
+            f"[f1] RT+Oscar features added: {len(rt_oscar_feat_cols)}  "
+            f"({', '.join(rt_oscar_feat_cols[:6])}{'…' if len(rt_oscar_feat_cols) > 6 else ''})"
+        )
+
     # ── 7. Build final feature column list ────────────────────────────────────
     all_feat_cols = (
         [
@@ -750,6 +818,8 @@ def run(state: dict) -> dict:
         + (["title_group_size_train", "title_unique_years_train", "title_conflicting_years",
             "title_sim_to_hit", "title_sim_to_non_hit", "title_sim_margin"]
            if "title_group_size_train" in train_feat.columns else [])
+        + genre_feat_cols
+        + rt_oscar_feat_cols
     )
     all_feat_cols = [c for c in all_feat_cols if c in train_feat.columns]
 

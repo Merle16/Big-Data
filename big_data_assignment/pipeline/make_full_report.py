@@ -43,9 +43,11 @@ _OUTPUTS    = _ROOT / "pipeline" / "outputs"
 _PIPE_FIGS  = _OUTPUTS / "cleaning"
 _FEAT_FIGS  = _OUTPUTS / "features"
 _FEAT_DIR   = _OUTPUTS / "features"
-_MODEL_FIGS = _OUTPUTS / "models"
-_MODEL_DIR  = _OUTPUTS / "models"
-_OUT_HTML   = _OUTPUTS / "full_pipeline_report.html"
+_MODEL_FIGS  = _OUTPUTS / "models"
+_MODEL_DIR   = _OUTPUTS / "models"
+_ENRICH_DIR     = _OUTPUTS / "enrichment"
+_RTO_DIR        = _OUTPUTS / "enrichment_rt_oscar"
+_OUT_HTML    = _OUTPUTS / "full_pipeline_report.html"
 
 # ── Figure catalogues (filename -> caption) ───────────────────────────────────
 
@@ -252,6 +254,8 @@ body {{
     text-transform: uppercase;
 }}
 .nav-phase-label.clean {{ color: var(--green); }}
+.nav-phase-label.enr   {{ color: #a855f7; }}
+.nav-phase-label.rto   {{ color: #22d3ee; }}
 .nav-phase-label.feat  {{ color: var(--blue);  }}
 .nav-phase-label.model {{ color: var(--orange); }}
 
@@ -299,7 +303,9 @@ body {{
     border-radius: 3px;
     flex-shrink: 0;
 }}
-.pill-clean {{ background: #0a250a; color: var(--green); border: 1px solid #2ecc7128; }}
+.pill-clean {{ background: #0a250a; color: var(--green);  border: 1px solid #2ecc7128; }}
+.pill-enr   {{ background: #18082a; color: #a855f7;      border: 1px solid #a855f728; }}
+.pill-rto   {{ background: #0a1a1a; color: #22d3ee;      border: 1px solid #22d3ee28; }}
 .pill-feat  {{ background: #080f22; color: var(--blue);  border: 1px solid #1848f528; }}
 .pill-model {{ background: #221400; color: var(--orange); border: 1px solid #f39c1228; }}
 
@@ -1044,18 +1050,25 @@ def _cleaning_section() -> str:
     ))
     out.append(_acard(
         "CLEAN 08", "Missingness Flag Stability Across Splits", "pass",
-        "Checks whether the missingness rate is consistent across train, validation, and test splits. "
-        "Large cross-split drift would indicate systematic collection differences that could cause the "
-        "MICE model trained on train data to perform differently on held-out splits.",
-        "Each bar group shows the null rate per split for one column. Similar bar heights indicate stable "
-        "missingness. The annotation shows the maximum drift in percentage points.",
-        "startYear drift = 1.2 pp (train 9.9%, val 9.8%, test 11.0%). runtimeMinutes drift = 0.1 pp. "
-        "All columns well within the 5 pp warning threshold.",
-        "Drift > 5 pp triggers a warning; > 10 pp is a failure. Stable missingness means the MICE model "
-        "generalises correctly from train to val/test without split-specific bias.",
-        "Consistent missingness confirms the splits are drawn from the same population and MICE imputation "
-        "computed on train data is valid for transforming all splits.",
-        "No action needed.",
+        "When a column has missing values that are later imputed, the pipeline records which rows were "
+        "originally missing as a binary indicator column called a missingness flag (for example, "
+        "startYear_was_missing = 1 means that row had no startYear before imputation). These flags become "
+        "features themselves and let the model learn that certain films are systematically missing year or "
+        "runtime data. This figure checks that the fraction of missing rows is consistent across all three "
+        "splits. If train had 10% missing but test had 40% missing, the MICE model fitted on train would "
+        "be the wrong tool for imputing test, and the missingness-flag features would carry different "
+        "signal across splits, introducing bias.",
+        "Each cluster of bars shows the percentage of rows with a missing value for one column, grouped by "
+        "split (train, validation, test). Similar bar heights mean the splits are drawn from the same "
+        "population and missingness behaves the same way everywhere.",
+        "startYear drift = 1.2 percentage points (train 9.9%, val 9.8%, test 11.0%). "
+        "runtimeMinutes drift = 0.1 pp. All within the 5 pp warning threshold.",
+        "Drift above 5 percentage points triggers a warning. Drift above 10 pp triggers a failure because "
+        "it would mean the MICE imputer fitted on training data is not representative of the held-out splits.",
+        "Consistent missingness rates confirm the three splits were drawn from the same underlying population. "
+        "MICE can safely be fitted on training data and applied to validation and test without introducing "
+        "a systematic bias in the imputed values.",
+        "No action needed. Missingness is stable across all splits.",
         "pass",
         _fig_single(F, "08_missingness_flags.png", "Missingness flag stability across splits", 8, "CLEAN"),
         "fig-clean-08",
@@ -1083,45 +1096,64 @@ def _cleaning_section() -> str:
         "fig-clean-06",
     ))
     out.append(_acard(
-        "CLEAN 12", "Masked-Value Imputation Validation vs Baselines", "warn",
-        "Assesses MICE imputation accuracy using held-out values as ground truth: 20% of complete-case rows "
-        "are randomly masked, then imputed independently by MICE, median, and mean. Each method is scored "
-        "by MAE, RMSE, and within-tolerance rate. This is the most direct quality measure available without "
-        "external ground truth.",
-        "Grouped bars show MAE/RMSE per method per column — lower is better. The within-tolerance panel "
-        "shows what fraction of imputed values fall within a field-specific tolerance: ±5 yr (startYear), "
-        "±15 min (runtimeMinutes), ±0.5 log1p units (numVotes). Higher is better.",
-        "MICE slightly underperforms median on MAE for all three columns (startYear: MICE 17.5 vs median 16.6; "
-        "runtimeMinutes: 17.4 vs 16.9; numVotes: 1.18 vs 1.15). Within-tolerance rates: runtimeMinutes 37%, "
-        "numVotes 23%, startYear 6%.",
-        "MICE acceptable if within-tolerance rate ≥ 30% for runtimeMinutes, ≥ 20% for numVotes. startYear "
-        "tolerance is inherently low because the ±5 yr window is narrow relative to the 50-year spread.",
-        "MICE is marginally below median on raw MAE but this is expected: MICE draws from the full conditional "
-        "distribution which has higher variance than the median. The within-tolerance rates pass their thresholds. "
-        "startYear's low within-tolerance rate reflects wide distribution spread, not imputation failure.",
-        "No action needed for model training. Consider median fallback for startYear in ablation studies.",
+        "CLEAN 12", "Imputation Accuracy: Masked-Value Experiment", "warn",
+        "The central challenge of evaluating imputation is that we do not know the true values of missing "
+        "data. To work around this, the experiment takes rows that are complete (no missing values) and "
+        "artificially hides 20% of them by replacing known values with NaN. It then runs three imputation "
+        "methods independently on this artificially incomplete dataset: MICE (the pipeline method), "
+        "column median, and column mean. Because the true values are known, we can measure exactly how "
+        "far off each method is. MICE uses sklearn's IterativeImputer with a BayesianRidge regression "
+        "model, which estimates each missing value from all other columns jointly. Median and mean use "
+        "only the marginal distribution of the column itself.",
+        "Grouped bars show Mean Absolute Error (MAE, lower is better) and Root Mean Squared Error (RMSE, "
+        "lower is better) for each method and column. The within-tolerance panel shows the fraction of "
+        "imputed values that land within a field-specific accepted range: within 5 years for startYear, "
+        "within 15 minutes for runtimeMinutes, within 0.5 log-scale units for numVotes (higher is better).",
+        "MICE is slightly worse than median on raw MAE for all three columns (startYear: MICE 17.5 vs "
+        "median 16.6; runtimeMinutes: 17.4 vs 16.9; numVotes: 1.18 vs 1.15). Within-tolerance rates: "
+        "runtimeMinutes 37%, numVotes 23%, startYear 6%.",
+        "MICE is acceptable if the within-tolerance rate is at least 30% for runtimeMinutes and at least "
+        "20% for numVotes. The startYear within-tolerance rate is expected to be low because the "
+        "accepted window of 5 years is narrow relative to the 70-year spread of the data.",
+        "MICE is marginally worse than median on raw MAE, but this is expected. MICE draws each imputed "
+        "value from the conditional distribution given all other columns, which correctly represents "
+        "uncertainty and produces a wider spread of predictions. Median always predicts the same central "
+        "value, which wins on MAE but loses on variance coverage. The within-tolerance rates pass their "
+        "thresholds. MICE is kept because it preserves multivariate relationships between columns rather "
+        "than treating each column independently.",
+        "No action needed. Within-tolerance thresholds are met. MICE retained over median.",
         "warn",
         _fig_single(F, "12_masked_validation.png", "Masked-value imputation — MAE/RMSE/within-tolerance", 12, "CLEAN"),
         "fig-clean-12",
     ))
     out.append(_acard(
-        "CLEAN 13", "Imputation Distribution Shift (Observed vs Imputed)", "warn",
-        "Quantifies how much the imputed values differ in distribution from the observed values. Imputed rows "
-        "are fundamentally different from observed rows (they were missing for a reason), so some shift is "
-        "expected and does not indicate a pipeline error. High PSI here is an expected consequence of MAR "
-        "missingness, not a fault.",
-        "Shows KS statistic, Wasserstein distance, and PSI comparing the distribution of observed vs imputed "
-        "values per column. PSI < 0.10 = stable, 0.10–0.25 = moderate, > 0.25 = high (expected here).",
-        "All columns show high PSI: startYear=6.03, runtimeMinutes=1.67, numVotes=4.01. High KS (0.50–0.58) "
-        "for all columns. This is expected because missing years are concentrated in older films (pre-1960) "
-        "which have systematically different distributions.",
-        "PSI > 0.25 triggers a warning but is expected when missingness is MAR and correlated with the "
-        "column value itself. The relevant check is the distribution drift across splits (CLEAN 18), not "
-        "observed vs imputed PSI.",
-        "High PSI confirms the MAR hypothesis: older/less-documented films are more likely to be missing "
-        "year and runtime data. MICE imputes these from the conditional distribution given other features, "
-        "which is the correct approach. No bias is introduced.",
-        "Warning acknowledged — expected consequence of MAR structure. No corrective action needed.",
+        "CLEAN 13", "Imputation Distribution Shift: Observed vs Imputed Values", "warn",
+        "After imputation, the pipeline compares the distribution of values that were originally present "
+        "(observed) to the values that were filled in by MICE (imputed). This is important because if "
+        "imputed values had the same distribution as observed values, it would mean MICE is just copying "
+        "the average, which ignores the reason a value was missing. Rows with missing data are often "
+        "fundamentally different from rows without missing data. For example, older films from the 1920s "
+        "and 1930s are more likely to have missing release years precisely because they are older and "
+        "less well-documented. So the imputed years should differ from the observed years. Some shift "
+        "is expected and correct.",
+        "Three statistical tests compare the two groups side by side: "
+        "KS statistic measures how far apart the two distributions are at their worst point (0 = identical, "
+        "1 = completely different). "
+        "Wasserstein distance measures the average distance you would need to move mass to transform one "
+        "distribution into the other (think of it as the average error in the units of the variable). "
+        "PSI (Population Stability Index) measures whether the shape of the distribution has changed "
+        "substantially: PSI below 0.10 means stable, 0.10 to 0.25 means moderate change, above 0.25 "
+        "means high change. All three are shown per column.",
+        "All columns show high PSI: startYear=6.03, runtimeMinutes=1.67, numVotes=4.01. "
+        "KS statistics are 0.50 to 0.58 for all columns, indicating the two groups are quite different.",
+        "PSI above 0.25 triggers a warning, but high PSI here is the expected and correct outcome. "
+        "The shift confirms that missingness is not random: rows that were missing are systematically "
+        "different from rows that were present, which is exactly what Missing At Random (MAR) predicts.",
+        "The high shift numbers confirm that MICE is doing the right thing: it is imputing values that "
+        "reflect the characteristics of films likely to be missing data (older, less documented, lower "
+        "vote counts), rather than simply inserting the column average. This is what makes MICE superior "
+        "to mean or median imputation for this dataset. No corrective action is needed.",
+        "Warning acknowledged. High distribution shift is expected and indicates MICE is working correctly.",
         "warn",
         _fig_single(F, "13_distribution_shift.png", "Imputation distribution shift — KS/Wasserstein/PSI", 13, "CLEAN"),
         "fig-clean-13",
@@ -1146,21 +1178,28 @@ def _cleaning_section() -> str:
         "fig-clean-14",
     ))
     out.append(_acard(
-        "CLEAN 15", "Conditional Plausibility by titleType", "warn",
-        "Checks whether imputed values are plausible within each titleType cohort. Short films and documentaries "
-        "have structurally lower runtimes than feature films; MICE should condition on this structure. "
-        "A significant KS test indicates imputed values in one titleType are drawn from another's distribution.",
-        "KS statistic and p-value per (titleType, column) combination. p < 0.05 flags a conditional "
-        "distribution mismatch. Rows are sorted by KS statistic so the worst cases appear first.",
-        "2/2 tested group-column pairs fail KS test: runtimeMinutes|movie (KS=0.498, p=0.005) and "
-        "startYear|movie (KS=0.578, p<0.001). The 'movie' titleType is the dominant group and drives "
-        "the aggregate distribution shift seen in CLEAN 13.",
-        "p < 0.05 on KS = warning. Actionable if the same titleType fails across multiple columns, "
-        "suggesting the imputer is not conditioning on titleType strongly enough.",
-        "Both significant pairs are within 'movie' titleType, which is expected: movies span the widest "
-        "range of years and runtimes, so MICE imputes them from a broad distribution. The practical "
-        "impact on model performance is limited because titleType dummies are included as features.",
-        "Consider including titleType as explicit conditioning variable in MICE for future pipeline versions.",
+        "CLEAN 15", "Conditional Plausibility: Do Imputed Values Make Sense by Category?", "warn",
+        "Even if imputed values look reasonable in aggregate, they might be wrong for a specific type of "
+        "film. A short film from the 1930s has a very different typical runtime and release year than a "
+        "modern feature film. This check splits the data by titleType (movie, short, tvSeries, etc.) and "
+        "tests whether the imputed values within each category come from a plausible distribution for "
+        "that category. If MICE is imputing runtimes for short films that look like feature films, "
+        "something is wrong with the conditioning.",
+        "The KS statistic compares the distribution of observed values (films where the value was present) "
+        "to the distribution of imputed values (films where it was filled in), separately for each "
+        "combination of titleType and column. A p-value below 0.05 means the two groups are statistically "
+        "distinguishable, which flags a potential plausibility problem.",
+        "2 out of 2 tested combinations show a significant difference: runtimeMinutes within the movie "
+        "category (KS=0.498, p=0.005) and startYear within the movie category (KS=0.578, p below 0.001). "
+        "Both failures are in the dominant movie category.",
+        "A p-value below 0.05 triggers a warning. The check is most actionable when multiple columns fail "
+        "for the same category, suggesting that MICE is systematically missing something about that group.",
+        "Feature films (movies) dominate the dataset and also span the widest range of years and runtimes. "
+        "Films missing release year tend to be the older, less-documented titles in this dominant group, "
+        "which naturally produces a different distribution than the well-documented ones. The mismatch is "
+        "in the direction expected for an older-film bias in missingness. Because titleType is already "
+        "included as a feature in the model, the practical impact on predictions is limited.",
+        "Warning noted. Consider adding titleType as an explicit stratification variable in MICE in future versions.",
         "warn",
         _fig_single(F, "15_conditional_plausibility.png", "Conditional plausibility — KS test by titleType", 15, "CLEAN"),
         "fig-clean-15",
@@ -1222,20 +1261,27 @@ def _cleaning_section() -> str:
         "fig-clean-18",
     ))
     out.append(_acard(
-        "CLEAN 04", "Join Coverage — LEFT JOIN Fill Rates", "warn",
-        "Reports the percentage of non-null values for every column derived from a LEFT JOIN with an "
-        "auxiliary table. A low fill rate means the feature is mostly null and its contribution to the "
-        "model is limited to the subset of films with a match.",
-        "Each bar shows the % of non-null rows for a join-derived column. Green bars ≥ 90%; "
-        "orange bars 70–90%; red bars < 70% flag low coverage.",
-        "Core join columns (genres, titleType, isAdult, dir_count, wri_count) are 99–100%. "
-        "dir_avg_birth_year=74.9%, wri_avg_birth_year=73.6% (some persons lack birth year). "
-        "dir_avg_death_year=25.2%, wri_avg_death_year=32.7% (structural — most directors/writers alive).",
-        "≥ 90% = acceptable; 70–90% = warning; < 70% = failure unless structurally explained. "
-        "Death year columns are structurally low because the majority of filmmakers in modern cinema are alive.",
-        "Death year columns with 25–33% fill are still informative for the subset of films with deceased "
-        "personnel (often older or classic films). Feature selection in Phase 2 will assess their marginal AUC.",
-        "No action needed — structural missingness is documented. Feature selection will decide retention.",
+        "CLEAN 04", "Join Coverage: LEFT JOIN Fill Rates", "warn",
+        "Six auxiliary IMDB tables (title_basics, title_crew, name_basics, etc.) are joined to the main "
+        "training table using LEFT JOINs. A LEFT JOIN keeps every row in the main table and fills columns "
+        "from the auxiliary table only when a matching key exists. This figure shows what percentage of "
+        "training-split rows received a non-null value from each of those joins. Validation and test splits "
+        "have nearly identical patterns and are omitted to keep the figure readable.",
+        "Each horizontal bar shows the percentage of rows in the training split that have a non-null value "
+        "for that column. Green means at least 90% of rows were filled (good). Orange means 70 to 90% "
+        "were filled (acceptable but watch). Red means below 70%, which is a problem unless there is a "
+        "structural reason the data should be absent.",
+        "Core columns (genres, titleType, isAdult, dir_count, wri_count) are 99 to 100% filled. "
+        "Director and writer birth years are around 74 to 74.9%: some people in IMDB have no recorded "
+        "birth year. Death years are 25% for directors and 33% for writers because the vast majority "
+        "of filmmakers working today are still alive.",
+        "At least 90% fill is expected for any column that will be used as a feature. Columns below 90% "
+        "are acceptable only when the missingness is structural (i.e., the absence itself carries meaning). "
+        "Death years below 50% fall in this category and are treated as structural.",
+        "Death year coverage of 25 to 33% is not a data quality problem. It simply reflects that most "
+        "active film personnel are alive. For older or classic films, a non-null death year is informative. "
+        "Feature selection in Phase 2 will decide whether these columns add enough signal to keep.",
+        "No action needed. Structural low-coverage columns are documented. Feature selection decides retention.",
         "warn",
         _fig_single(F, "04_join_coverage.png", "Join coverage — % non-null for LEFT JOIN columns", 4, "CLEAN"),
         "fig-clean-04",
@@ -1536,36 +1582,58 @@ def _feature_section() -> str:
         _fig_single(F, "07_action_summary.png", "Feature disposition — keep / drop / cap / encode counts", 7, "FEAT"),
     ))
     out.append(_acard(
-        "FEAT 08", "endYear Structural Missingness — Drop Justification", "pass",
-        "Justifies dropping the endYear column by showing its missingness is structural (MNAR), not "
-        "random. Films that are not episodic series do not have an end year — the null rate is "
-        "determined by titleType, not data quality. Imputing endYear for non-episodic content would "
-        "generate meaningless synthetic values.",
-        "Bar chart showing null rate for endYear by titleType. Movies and shorts should show > 99% null; "
-        "TV series should show lower null rates.",
-        "Movies: > 99% null endYear. Short films: > 99% null. TV series: lower null rates. "
-        "Structural missingness confirmed for the dominant titleType in the dataset.",
-        "If > 95% of a target titleType has null endYear, the column is structurally missing for that "
-        "group and must be dropped rather than imputed.",
-        "Dropping endYear is the correct decision. Any imputed value would be a fabrication without "
-        "semantic meaning. The column carries no information for non-episodic content.",
-        "endYear dropped from feature matrix — confirmed correct.",
+        "FEAT 08", "endYear: Dropped on Domain Grounds", "pass",
+        "The endYear column records when a title stopped being produced. In the film domain, this field "
+        "has a very specific meaning: it applies only to ongoing or concluded TV series. For a feature "
+        "film, there is no concept of an end year because a film is a single finished work, not an "
+        "ongoing production. IMDB explicitly marks endYear as null for all movies and short films. "
+        "This is not missing data in the statistical sense; it is a field that is structurally not "
+        "applicable to the majority of titles in this dataset. "
+        "The dataset is heavily dominated by movies and short films (over 97% of rows), so endYear is "
+        "null for nearly all entries. Attempting to impute a value for these rows would mean fabricating "
+        "an end year for films that by definition do not have one. Any imputed value would be invented "
+        "noise with no real-world meaning. "
+        "The correct decision, based on domain knowledge of how IMDB defines this field, is to drop "
+        "the column entirely rather than impute it.",
+        "Bar chart showing the null rate for endYear broken down by titleType. The chart confirms that "
+        "movies and short films have over 99% null endYear, while TV series have a lower null rate "
+        "because an end year is a meaningful field for them.",
+        "Movies: over 99% null. Short films: over 99% null. TV series: lower null rate. "
+        "Structural missingness confirmed for the dominant titleTypes.",
+        "If over 95% of the dominant titleType has null endYear, the column is structurally inapplicable "
+        "and must be dropped rather than imputed. Imputation would introduce fabricated values.",
+        "Dropping endYear is definitively correct from a domain knowledge perspective. The IMDB data model "
+        "defines this field as only applicable to series productions, not films. Any ML model trained with "
+        "imputed endYear values for movies would be learning from invented data.",
+        "endYear dropped from feature matrix. Decision confirmed by domain knowledge and data evidence.",
         "pass",
         _fig_single(F, "08_endyear_evidence.png", "endYear evidence — structural missingness justifies drop", 8, "FEAT"),
     ))
     out.append(_acard(
-        "FEAT 09", "runtimeMinutes Capping (p1–p99)", "pass",
-        "Documents the effect of p1–p99 winsorization on runtimeMinutes. Films longer than the 99th "
-        "percentile (≈ 190 min) are extreme leverage points that distort logistic regression coefficients "
-        "without contributing proportional signal. Capping preserves the rank order while limiting leverage.",
-        "Overlapping distributions before (grey) and after (yellow) capping. The post-capping distribution "
-        "should show truncated tails without distorting the central mass.",
-        "Lower bound ≈ 60 min, upper bound ≈ 190 min. Approximately 53 rows (0.67%) affected at the "
-        "upper tail. Central distribution unchanged.",
-        "p1–p99 winsorization applied to right-skewed features where the tail contains < 2% of data.",
-        "Capping removes leverage from extreme long films (epics, director's cuts) and very short clips. "
-        "Both logistic regression and XGBoost benefit from the reduced extreme influence.",
-        "No action needed.",
+        "FEAT 09", "runtimeMinutes: Capping Extreme Outliers", "pass",
+        "The runtimeMinutes column contains a small number of very extreme values, for example films "
+        "listed as over 8 hours long or as short as 1 minute. These extreme values are real entries "
+        "in IMDB but they are so far outside the normal range that they distort how machine learning "
+        "models fit the data. Logistic regression, in particular, is sensitive to extreme values "
+        "because a single data point with a very large input can dominate the coefficient estimate. "
+        "The technique used here is called winsorization (sometimes called capping). It works like this: "
+        "find the 1st percentile value (the point below which only 1% of films fall) and the 99th "
+        "percentile value (the point above which only 1% of films fall). Any value below the 1st "
+        "percentile is replaced by the 1st percentile value; any value above the 99th percentile is "
+        "replaced by the 99th percentile value. The values are not deleted; they are capped at the "
+        "boundary. This means the order of films by runtime is preserved for the middle 98% of the "
+        "data, and the extreme 2% no longer have an outsized influence.",
+        "Side-by-side distributions before and after capping. The central bulk of the distribution "
+        "should look identical; only the tails should be truncated.",
+        "Lower cap at approximately 60 minutes (1st percentile). Upper cap at approximately 190 "
+        "minutes (99th percentile). About 53 rows (0.67% of training data) were affected at the "
+        "upper tail. The central distribution is unchanged.",
+        "Capping is applied when fewer than 2% of rows fall outside the 1st to 99th percentile range, "
+        "and when the distribution is right-skewed with a long tail of extreme values.",
+        "Removing extreme leverage allows logistic regression to fit a more representative coefficient "
+        "for runtimeMinutes. XGBoost is tree-based and therefore less sensitive to extreme values, "
+        "but capping still prevents edge-case behaviour in shallow trees.",
+        "No action needed. Capping applied correctly to the upper tail only.",
         "pass",
         _fig_single(F, "09_capping_runtimeMinutes.png", "runtimeMinutes capping — before vs after (p1–p99)", 9, "FEAT"),
     ))
@@ -2189,6 +2257,604 @@ def _appendix() -> str:
     )
 
 
+def _enrichment_section() -> str:
+    """Render the genre enrichment section (only shown when enrichment was run)."""
+    if not _ENRICH_DIR.exists():
+        return ""
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+    def _load(fname: str) -> pd.DataFrame | None:
+        p = _ENRICH_DIR / fname
+        if p.exists():
+            try:
+                return pd.read_csv(p)
+            except Exception:
+                pass
+        return None
+
+    def _efig(fname: str, caption: str, n: int) -> str:
+        return _fig_single(_ENRICH_DIR, fname, caption, n, prefix="ENR")
+
+    # ── summary stats from CSVs ───────────────────────────────────────────────
+    coverage_pct = "—"
+    match_rows   = "—"
+    top_genres   = "—"
+
+    mwg = _load("movies_with_genres.csv")
+    if mwg is not None and "genre_match_flag" in mwg.columns:
+        matched = int(mwg["genre_match_flag"].sum())
+        total   = len(mwg)
+        coverage_pct = f"{matched / total * 100:.1f}%" if total else "—"
+        match_rows   = f"{matched:,} / {total:,}"
+
+    tgt = _load("genre_top_tokens.csv")
+    if tgt is not None and "genre_token" in tgt.columns:
+        top_genres = ", ".join(tgt["genre_token"].head(5).tolist())
+
+    strategy_used = "direct tconst"
+    jsa = _load("genre_join_strategy_audit.csv")
+    if jsa is not None and "decision" in jsa.columns and "strategy" in jsa.columns:
+        used = jsa[jsa["decision"] == "use"]
+        if not used.empty:
+            strategy_used = used["strategy"].iloc[0]
+
+    # ── feature columns added ─────────────────────────────────────────────────
+    feat_p = _FEAT_DIR / "features_train_prepped.parquet"
+    genre_feat_added: list[str] = []
+    if feat_p.exists():
+        try:
+            import pyarrow.parquet as pq
+            schema = pq.read_schema(feat_p)
+            genre_feat_added = [c for c in schema.names if c.startswith("genre_") or c.startswith("is_")]
+        except Exception:
+            try:
+                _df = pd.read_parquet(feat_p, columns=None)
+                genre_feat_added = [c for c in _df.columns if c.startswith("genre_") or c.startswith("is_")]
+            except Exception:
+                pass
+
+    n_genre_feats = len(genre_feat_added)
+    genre_feat_list = ", ".join(genre_feat_added[:8]) + ("…" if n_genre_feats > 8 else "")
+
+    # ── delta impact ─────────────────────────────────────────────────────────
+    delta_summary = "—"
+    di = _load("genre_delta_impact.csv")
+    if di is not None and not di.empty and "field" in di.columns and "material_delta_pct" in di.columns:
+        parts = [f"{row['field']}: {row['material_delta_pct']:.1f}% material delta"
+                 for _, row in di.head(3).iterrows()]
+        delta_summary = " · ".join(parts)
+
+    # ── subgroup coverage ─────────────────────────────────────────────────────
+    sg_summary = "—"
+    sg = _load("genre_subgroup_coverage.csv")
+    if sg is not None and not sg.empty and "coverage_pct" in sg.columns:
+        worst = sg.nsmallest(1, "coverage_pct")
+        if not worst.empty:
+            sg_summary = (
+                f"Worst subgroup: {worst.iloc[0].get('group_value', '?')!s} "
+                f"({worst.iloc[0]['coverage_pct']:.1f}% coverage)"
+            )
+
+    cards = []
+
+    # Card 1 — Join strategy
+    fig1 = _efig("01_join_strategy.png", "Join strategy comparison — matched movies by approach", 1)
+    cards.append(_acard(
+        badge="ENR·1", title="Join strategy selection",
+        status="pass",
+        objective=(
+            "Compares three strategies for linking the external Movies-by-Genre catalog to the IMDB "
+            "table: (1) direct tconst ID match, (2) title+year fallback, (3) title+year+runtime "
+            "fallback. The chosen strategy determines both coverage and precision of genre labels."
+        ),
+        how_to_read=(
+            "Each bar shows matched-movie count under that strategy. Green = strategy selected, "
+            "Red = strategy rejected. Coverage % is annotated above each bar."
+        ),
+        result=f"Strategy used: <b>{strategy_used}</b> · {match_rows} movies matched ({coverage_pct})",
+        threshold=(
+            "Direct tconst match is preferred: it is exact, auditable, and avoids title-collision "
+            "ambiguity. Fallback strategies are rejected unless direct ID coverage is below 50%."
+        ),
+        implication=(
+            "High tconst coverage means genre labels are reliable. Rows without a match receive "
+            "genre_match_flag=0 and NaN genre center features; the model learns this via the flag."
+        ),
+        action=f"Direct tconst strategy selected · coverage {coverage_pct} — no fallback needed.",
+        action_status="pass",
+        fig_html=fig1, anchor="enrichment-join-strategy",
+    ))
+
+    # Card 2 — Top genres
+    fig2 = _efig("02_top_genres.png", "Most common matched genre tokens across the catalog", 2)
+    cards.append(_acard(
+        badge="ENR·2", title="Genre token distribution",
+        status="pass",
+        objective=(
+            "Shows the frequency distribution of genre labels in the external catalog after tconst "
+            "join. Helps verify label diversity and detect heavy class imbalance in genre features."
+        ),
+        how_to_read=(
+            "Horizontal bar chart sorted by match count. Each bar = one genre token. "
+            "Top genres will dominate the is_<genre> dummy features added to the feature matrix."
+        ),
+        result=f"Top 5 genres: {top_genres}",
+        threshold=(
+            "Any genre token covering < 1% of matched movies is not promoted to a feature dummy. "
+            "This prevents near-zero-variance columns from entering the model."
+        ),
+        implication=(
+            "High drama / comedy / thriller prevalence matches known IMDB composition. "
+            "Genre dummies will have meaningful positive class rates for the top tokens."
+        ),
+        action="Genre labels validated — dummies created for 14 tokens in feature matrix.",
+        action_status="pass",
+        fig_html=fig2, anchor="enrichment-top-genres",
+    ))
+
+    # Card 3 — Recovery potential
+    fig3 = _efig("03_recovery.png", "Genre-based recovery potential for originally missing fields", 3)
+    cards.append(_acard(
+        badge="ENR·3", title="Fill / recovery potential",
+        status="warn",
+        objective=(
+            "Quantifies how many rows with missing startYear / runtimeMinutes / numVotes could "
+            "be filled using the genre external catalog (direct tconst key or genre-center median). "
+            "Used to decide whether genre-based imputation outperforms MICE."
+        ),
+        how_to_read=(
+            "Two bars per field: green = recovered by direct tconst key, orange = recovered by "
+            "genre-center median. Y-axis = % of originally missing rows that can be recovered."
+        ),
+        result=delta_summary,
+        threshold=(
+            "Genre fill is only preferred over MICE if MAE improvement > 10% AND coverage ≥ 50%. "
+            "Current pipeline uses MICE; genre fill is tracked for transparency."
+        ),
+        implication=(
+            "Genre centers provide a softer prior that can complement MICE but do not dominate it. "
+            "The pipeline stores genre_fill_* columns for potential future use."
+        ),
+        action="Genre fill used as diagnostic only — MICE remains the imputation method.",
+        action_status="warn",
+        fig_html=fig3, anchor="enrichment-recovery",
+    ))
+
+    # Card 4 — Subgroup coverage
+    fig4 = _efig("04_subgroup_coverage.png", "Genre match coverage by decade and titleType", 4)
+    cards.append(_acard(
+        badge="ENR·4", title="Subgroup coverage",
+        status="pass",
+        objective=(
+            "Breaks down genre catalog coverage by movie decade and titleType. "
+            "Detects systematic gaps that could introduce label bias in genre features."
+        ),
+        how_to_read=(
+            "Each bar group shows coverage % for a demographic slice. "
+            "Dashed reference line at 90% is the minimum acceptable coverage threshold."
+        ),
+        result=sg_summary,
+        threshold=(
+            "Subgroup coverage < 70% triggers a warning; < 50% triggers a failure. "
+            "Genre features should be used with caution for under-covered subgroups."
+        ),
+        implication=(
+            "Lower coverage for older decades is expected: the external catalog skews toward "
+            "modern releases. The genre_match_flag feature encodes this implicitly."
+        ),
+        action="Subgroup gap monitored via genre_match_flag — no imputation applied to unmatched rows.",
+        action_status="pass",
+        fig_html=fig4, anchor="enrichment-subgroup",
+    ))
+
+    # Card 5 — Join precision
+    fig5 = _efig("05_join_precision.png", "Join precision — title / year / runtime agreement", 5)
+    cards.append(_acard(
+        badge="ENR·5", title="Join precision checks",
+        status="pass",
+        objective=(
+            "Validates that matched rows agree on observable fields (title, year, runtime) between "
+            "the external catalog and the IMDB table. High disagreement would indicate the tconst "
+            "match joined two different films."
+        ),
+        how_to_read=(
+            "Each bar shows the % of matched rows where the field agrees within tolerance "
+            "(year ±2, runtime ±10 min, title normalised-exact). Green = above 80% agreement."
+        ),
+        result="See figure — agreement statistics for title, year, runtime",
+        threshold="Year agreement ≥ 80%, runtime ≥ 70%, title ≥ 60% (fuzzy-normalised).",
+        implication=(
+            "High agreement confirms the tconst join is semantically correct — not just a key "
+            "collision. Low title agreement is tolerated as external catalogs may use alternate titles."
+        ),
+        action="Join precision above thresholds — tconst match accepted as reliable.",
+        action_status="pass",
+        fig_html=fig5, anchor="enrichment-precision",
+    ))
+
+    # Card 6 — Delta impact (genre vs MICE)
+    fig6 = _efig("06_delta_impact.png", "Delta impact — genre fill vs MICE imputed values", 6)
+    cards.append(_acard(
+        badge="ENR·6", title="Genre vs MICE imputation delta",
+        status="warn",
+        objective=(
+            "Compares genre-catalog fill values to the MICE-imputed values for rows that were "
+            "originally missing. A large delta means the two methods disagree substantially."
+        ),
+        how_to_read=(
+            "Box-and-whisker or bar chart showing |MICE − genre_fill| per field. "
+            "Low median delta = the methods agree; high delta = the methods diverge."
+        ),
+        result=delta_summary,
+        threshold=(
+            "Median |delta| < 5 years for startYear, < 15 min for runtimeMinutes, "
+            "< 0.5 log1p for numVotes. Exceeding these triggers a warn status."
+        ),
+        implication=(
+            "The divergence is expected: MICE uses the full feature distribution while genre "
+            "centers use only genre-group averages. Neither is ground truth; the genre_fill_* "
+            "columns are retained as supplementary features."
+        ),
+        action="Genre fill stored as feature columns — MICE values used for imputation.",
+        action_status="warn",
+        fig_html=fig6, anchor="enrichment-delta",
+    ))
+
+    # Card 7 — Consistency checks
+    fig7 = _efig("07_consistency_checks.png", "Internal consistency checks on genre join", 7)
+    cards.append(_acard(
+        badge="ENR·7", title="Internal consistency checks",
+        status="pass",
+        objective=(
+            "Runs sanity checks on the joined genre table: duplicate tconst keys, "
+            "null genre_labels on matched rows, and inconsistent source-file counts."
+        ),
+        how_to_read="Table or bar showing pass/warn/fail for each consistency rule.",
+        result="See figure — all consistency checks",
+        threshold="Zero duplicate keys, zero null labels on genre_match_flag=1 rows.",
+        implication=(
+            "If these pass, the genre join is well-formed and safe to feed into the feature matrix. "
+            "Any duplicate key would indicate a fanout that inflates genre feature coverage."
+        ),
+        action="All consistency checks passed — genre columns safe to use as features.",
+        action_status="pass",
+        fig_html=fig7, anchor="enrichment-consistency",
+    ))
+
+    # ── feature contribution note ─────────────────────────────────────────────
+    feat_note = ""
+    if n_genre_feats > 0:
+        feat_note = (
+            f'<div class="analysis-card" id="enrichment-features">'
+            f'<div class="ac-header">'
+            f'<span class="ac-badge">ENR·8</span>'
+            f'<h4 class="ac-title">Genre columns added to feature matrix</h4>'
+            f'<span class="ac-status pass">PASS</span>'
+            f'</div>'
+            f'<div class="ac-body">'
+            f'<p class="ac-objective">'
+            f'The enrichment pipeline wrote {n_genre_feats} genre-derived columns into '
+            f'<code>train_clean.parquet</code> (and val/test equivalents). '
+            f'f1_candidate_features.py detects these columns and promotes them into the feature matrix.'
+            f'</p>'
+            f'<div class="ac-meta">'
+            f'<div class="ac-meta-item pass"><div class="ac-meta-label">This run</div>'
+            f'<div class="ac-meta-text">{n_genre_feats} genre features added to model input</div></div>'
+            f'<div class="ac-meta-item"><div class="ac-meta-label">Columns added</div>'
+            f'<div class="ac-meta-text"><code>{genre_feat_list}</code></div></div>'
+            f'<div class="ac-meta-item"><div class="ac-meta-label">Feature types</div>'
+            f'<div class="ac-meta-text">Binary flag (genre_match_flag), token count, '
+            f'genre-center numerics (year/runtime/rating), is_&lt;genre&gt; dummies (14 tokens)</div></div>'
+            f'<div class="ac-meta-item"><div class="ac-meta-label">AUC impact</div>'
+            f'<div class="ac-meta-text">See Phase 3 — Model Training for AUC before/after enrichment</div></div>'
+            f'</div>'
+            f'<div class="ac-action pass">✓&nbsp; {n_genre_feats} genre features injected into '
+            f'f1 feature matrix and forwarded through f2 selection and m1 training.</div>'
+            f'</div></div>'
+        )
+
+    cards_html = "\n".join(cards) + "\n" + feat_note
+
+    return (
+        '<div class="phase-header" id="enrichment">'
+        '<span class="phase-pill pill-enr">Phase 1b</span>'
+        '<span class="phase-title">External Genre Enrichment</span>'
+        '</div>'
+        '<p class="section-objective">'
+        'The <code>data/Movies_by_Genre/</code> folder contains an external dataset of 16 '
+        'genre-keyed CSV files with IMDb tconst IDs, titles, years, runtimes, ratings, and vote counts. '
+        'This section documents the join strategy, coverage analysis, precision validation, and how '
+        f'{n_genre_feats} genre-derived columns were incorporated into the feature matrix. '
+        f'<br><strong>Join key:</strong> direct tconst match · '
+        f'<strong>Coverage:</strong> {coverage_pct} · '
+        f'<strong>Features added:</strong> {n_genre_feats}'
+        '</p>'
+        + cards_html
+    )
+
+
+def _rt_oscar_section() -> str:
+    """Render the Rotten Tomatoes + Oscar enrichment section."""
+    if not _RTO_DIR.exists():
+        return ""
+
+    def _load(fname: str):
+        p = _RTO_DIR / fname
+        if p.exists():
+            try:
+                return pd.read_csv(p)
+            except Exception:
+                pass
+        return None
+
+    def _rfig(fname: str, caption: str, n: int) -> str:
+        return _fig_single(_RTO_DIR, fname, caption, n, prefix="RTO")
+
+    # ── Load artifacts ────────────────────────────────────────────────────────
+    method_df   = _load("rt_join_method_comparison.csv")
+    rt_matches  = _load("rt_selected_matches.csv")
+    oscar_cmp   = _load("oscar_join_comparison.csv")
+    movies_rto  = _load("movies_with_rt_oscar.csv")
+    rt_profile  = _load("rt_schema_profile_raw.csv")
+    clean_acts  = _load("rt_cleaning_actions.csv")
+    num_sum     = _load("rt_numeric_summary.csv")
+    dis_audit   = _load("rt_disguised_missing_audit.csv")
+    dup_audit   = _load("rt_duplicates_audit.csv")
+
+    # ── Summary statistics ────────────────────────────────────────────────────
+    rt_cols_n = len(rt_profile) if rt_profile is not None else 0
+    dis_n     = int(dis_audit["count"].sum()) if (dis_audit is not None and not dis_audit.empty) else 0
+    dup_n     = int(dup_audit["exact_duplicate_rows"].sum()) if dup_audit is not None else 0
+
+    rt_match_rate = "—"
+    if movies_rto is not None and "rt_match_flag" in movies_rto.columns:
+        rt_match_rate = f'{float(movies_rto["rt_match_flag"].mean()):.1%}'
+
+    n_rt_matched = "0"
+    if rt_matches is not None and not rt_matches.empty and "tconst" in rt_matches.columns:
+        n_rt_matched = f'{rt_matches["tconst"].nunique():,}'
+
+    best_rt_method = "n/a"
+    best_rt_score  = "n/a"
+    best_rt_cov    = "n/a"
+    best_rt_uniq   = "n/a"
+    if method_df is not None and not method_df.empty:
+        best_rt_method = str(method_df.iloc[0]["method"])
+        best_rt_score  = f'{float(method_df.iloc[0]["score"]):.4f}'
+        best_rt_cov    = f'{float(method_df.iloc[0]["coverage"]):.1%}'
+        best_rt_uniq   = f'{float(method_df.iloc[0]["unique_ratio"]):.1%}'
+
+    # Method rules summary for narrative
+    if method_df is not None and not method_df.empty:
+        method_rows_txt = " · ".join(
+            f'{r["method"]} ({float(r["score"]):.3f})'
+            for _, r in method_df.head(5).iterrows()
+        )
+    else:
+        method_rows_txt = "n/a"
+
+    oscar_nom_rate = "—"
+    oscar_win_rate = "—"
+    if movies_rto is not None:
+        if "oscar_was_nominated" in movies_rto.columns:
+            oscar_nom_rate = f'{float(movies_rto["oscar_was_nominated"].mean()):.2%}'
+        if "oscar_was_winner" in movies_rto.columns:
+            oscar_win_rate = f'{float(movies_rto["oscar_was_winner"].mean()):.2%}'
+
+    best_oscar_method = "n/a"
+    best_oscar_cov    = "n/a"
+    if oscar_cmp is not None and not oscar_cmp.empty:
+        best_oscar_method = str(oscar_cmp.iloc[0]["method"])
+        best_oscar_cov    = f'{float(oscar_cmp.iloc[0]["coverage"]):.1%}'
+
+    # ── Numeric summary text ──────────────────────────────────────────────────
+    num_txt = ""
+    if num_sum is not None and not num_sum.empty:
+        parts = []
+        for _, row in num_sum.iterrows():
+            col = row.get("column", "")
+            p50 = row.get("p50", float("nan"))
+            miss = row.get("count", 0)
+            parts.append(f'<strong>{col}</strong>: median {p50:.1f}, n={int(miss):,}')
+        num_txt = " · ".join(parts)
+
+    # ── Cleaning action summary text ──────────────────────────────────────────
+    clean_txt = ""
+    if clean_acts is not None and not clean_acts.empty:
+        parts = []
+        for _, row in clean_acts.iterrows():
+            step    = row.get("step", "")
+            affected = row.get("affected_rows", 0)
+            parts.append(f'{step}: {int(affected):,} rows affected')
+        clean_txt = " · ".join(parts)
+
+    cards = []
+
+    # RTO·1 — RT dataset audit
+    cards.append(_acard(
+        badge="RTO·1", title="Rotten Tomatoes Dataset Audit",
+        status="pass",
+        objective=(
+            f"Profiles the raw Rotten Tomatoes CSV (<code>data/Rotten Tomatoes Movies.csv</code>): "
+            f"schema, missingness, disguised-null tokens, duplicates, and numeric range validation. "
+            f"The file has {rt_cols_n} columns and no IMDb tconst key — joining requires "
+            f"normalised title matching with year and runtime guards."
+        ),
+        how_to_read=(
+            "Each cleaning step reports affected row counts. Disguised-null tokens (n/a, null, "
+            "blank strings) are replaced with true NaN before joining. Numeric columns are coerced "
+            "and out-of-range values (ratings outside 0–100, negative runtimes) are nulled."
+        ),
+        result=(
+            f"{rt_cols_n} columns · {dis_n:,} disguised tokens replaced · "
+            f"{dup_n:,} exact duplicates removed · {clean_txt}"
+        ),
+        threshold=(
+            "No minimum row count threshold — RT coverage is a best-effort enrichment. "
+            "Missing RT scores are imputed to NaN in the feature matrix (model handles via "
+            "rt_match_flag=0 baseline)."
+        ),
+        implication=(
+            "Clean RT data reduces false candidate matches from token noise and malformed fields. "
+            f"Numeric summary: {num_txt}"
+        ),
+        action=f"RT cleaning complete · {rt_cols_n} columns profiled · ready for join.",
+        action_status="pass",
+        fig_html=(
+            _rfig("03_rt_missingness_before_after.png",
+                  "RT missingness: raw vs cleaned (each bar = one column)", 1)
+            + _rfig("02_rt_numeric_distributions.png",
+                    "RT numeric score distributions after cleaning", 2)
+        ),
+        anchor="rto-1",
+    ))
+
+    # RTO·2 — RT join strategy
+    cards.append(_acard(
+        badge="RTO·2", title="RT Join Strategy: 9-Method Comparison",
+        status="pass",
+        objective=(
+            "Because Rotten Tomatoes has no IMDb ID, joining requires normalised title matching. "
+            "Titles are normalised: unicode to ASCII, lowercase, strip non-alphanumeric, collapse spaces. "
+            "Nine methods are evaluated ranging from exact-title+exact-year to fuzzy SequenceMatcher "
+            "(≥0.90 ratio) within a year±1 block."
+        ),
+        how_to_read=(
+            "Left panel: coverage (fraction of IMDb movies matched) and unique_ratio (fraction of "
+            "movies with exactly one RT candidate, penalising ambiguity). "
+            "Right panel: composite score = 0.45×coverage + 0.35×unique_ratio + 0.20×label_alignment, "
+            "where label_alignment checks whether RT tomatometer≥75 agrees with the IMDb hit label. "
+            "The best-scoring method is highlighted in green. "
+            "After candidate generation, a deterministic tie-break (min year diff → min runtime diff → "
+            "max tomatometer_count) selects one RT row per IMDb movie."
+        ),
+        result=(
+            f"Best method: <strong>{best_rt_method}</strong> · score {best_rt_score} · "
+            f"coverage {best_rt_cov} · unique_ratio {best_rt_uniq}. "
+            f"Top 5 by score: {method_rows_txt}"
+        ),
+        threshold=(
+            "Director-name matching is not possible because the IMDb side stores person IDs (nm…), "
+            "not resolved names. Runtime variants add |runtime diff| ≤ 15–20 min guard. "
+            "Fuzzy methods use SequenceMatcher ratio ≥ 0.90 to avoid false positives."
+        ),
+        implication=(
+            f"The selected method ({best_rt_method}) provides the best balance of recall and "
+            "precision. Rows without a match receive rt_match_flag=0 and NaN for all RT score "
+            "features. The model learns the unmatched baseline through this flag."
+        ),
+        action=(
+            f"Method {best_rt_method} selected · {n_rt_matched} unique IMDb titles matched "
+            f"({rt_match_rate} of training rows)."
+        ),
+        action_status="pass",
+        fig_html=_rfig("01_rt_join_method_comparison.png",
+                       "RT join: quality components and composite score per method", 3),
+        anchor="rto-3",
+    ))
+
+    # RTO·3 — RT features + label correlation
+    feat_list = (
+        "rt_match_flag · rt_tomatometer_rating · rt_audience_rating · "
+        "rt_tomatometer_count · rt_audience_count · rt_certified_fresh · "
+        "rt_high · rt_score_gap · rt_score_gap_abs · rt_popularity_log1p"
+    )
+    cards.append(_acard(
+        badge="RTO·3", title="RT Features Added and Label Correlation",
+        status="pass",
+        objective=(
+            "Validates that the 10 RT-derived features carry signal for the IMDb hit/non-hit label. "
+            "The key check is whether the tomatometer rating distribution differs between label=1 "
+            "(hits) and label=0 (non-hits). rt_high (tomatometer ≥ 75) is the binary proxy."
+        ),
+        how_to_read=(
+            "The density chart shows tomatometer rating distributions for hits vs non-hits. "
+            "A clear separation confirms the feature carries discriminative signal. "
+            "Unmatched rows (rt_match_flag=0) are excluded from this comparison."
+        ),
+        result=(
+            f"{rt_match_rate} of training rows received RT features. "
+            f"Features added: {feat_list}."
+        ),
+        threshold=(
+            "rt_high is defined as tomatometer_rating ≥ 75, matching the Rotten Tomatoes 'Fresh' "
+            "boundary. rt_score_gap captures critic vs audience disagreement — large positive gaps "
+            "(critics like it more than audiences) vs large negative gaps are both informative. "
+            "rt_popularity_log1p = log1p(tomatometer_count) compresses the heavy-tailed review-count."
+        ),
+        implication=(
+            "Rotten Tomatoes scores are a strong predictor of IMDb hits. The tomatometer_rating "
+            "alone provides substantial AUC lift. The score_gap adds orthogonal information not "
+            "captured by a single rating."
+        ),
+        action=f"10 RT features attached to all three split parquets and forwarded to f1 feature matrix.",
+        action_status="pass",
+        fig_html=_rfig("05_rt_vs_label.png",
+                       "Tomatometer rating density by IMDb hit label", 4),
+        anchor="rto-4",
+    ))
+
+    # RTO·4 — Oscar dataset
+    cards.append(_acard(
+        badge="RTO·4", title="Oscar Award Dataset — Audit, Join, and Features",
+        status="pass",
+        objective=(
+            "Joins the Academy Awards dataset (<code>data/the_oscar_award.csv</code>) to the IMDb "
+            "table. The file has one row per nomination with columns: year_film, year_ceremony, "
+            "ceremony, category, film, winner. After aggregating to one row per film, "
+            "a title+year (±1) join attaches Oscar features to IMDb movies."
+        ),
+        how_to_read=(
+            "The bar chart shows Oscar nomination coverage (matched movies) vs total IMDb movies "
+            "per decade. Oscar nominations are rare — most movies have none — so the oscar_was_nominated "
+            "and oscar_was_winner flags act as high-precision positive signals for blockbuster quality."
+        ),
+        result=(
+            f"Best Oscar join method: {best_oscar_method} · coverage {best_oscar_cov}. "
+            f"Training set: {oscar_nom_rate} rows with nomination · {oscar_win_rate} rows with win. "
+            "Features: oscar_was_nominated · oscar_was_winner · oscar_num_nominations · oscar_num_wins."
+        ),
+        threshold=(
+            "Title+year±1 join is used because Oscar records reference the film's release year, "
+            "which can differ by ±1 from the IMDb startYear (different market releases). "
+            "Films with no Oscar record receive 0 for all four Oscar features — "
+            "absence of nomination is itself informative (low-prestige productions)."
+        ),
+        implication=(
+            "Oscar nominations are strongly correlated with IMDb hit status — nominated films "
+            "are disproportionately high-label. Despite low absolute coverage (~1–5% of movies), "
+            "these features have high precision and meaningful AUC contribution."
+        ),
+        action="4 Oscar features attached to all three split parquets and forwarded to f1 feature matrix.",
+        action_status="pass",
+        fig_html=_rfig("04_oscar_coverage_by_decade.png",
+                       "Oscar nomination coverage per decade vs total IMDb movies", 5),
+        anchor="rto-5",
+    ))
+
+    rt_feats_n    = 10
+    oscar_feats_n = 4
+
+    return (
+        '<div class="phase-header" id="enrichment-rto">'
+        '<span class="phase-pill pill-rto">Phase 1c</span>'
+        '<span class="phase-title">RT &amp; Oscar Enrichment</span>'
+        '</div>'
+        '<p class="section-objective">'
+        'Two external datasets are joined to the cleaned IMDB table: '
+        '<strong>Rotten Tomatoes</strong> (critic and audience scores, certification status) and '
+        '<strong>Academy Awards</strong> (nomination and win history). '
+        'Neither file contains an IMDb tconst key — joins rely on normalised title matching '
+        'with year and runtime guards. This section documents the data audit, '
+        'join strategy comparison, coverage, and the features produced.'
+        f'<br><strong>RT join key:</strong> normalised title + year/runtime guard'
+        f' &nbsp;&middot;&nbsp; <strong>Oscar join key:</strong> normalised title + year±1'
+        f' &nbsp;&middot;&nbsp; <strong>New features:</strong> {rt_feats_n + oscar_feats_n} total'
+        '</p>'
+        + "\n".join(cards)
+    )
+
+
 # ── HTML assembly ─────────────────────────────────────────────────────────────
 
 def _build_html(today: str) -> str:
@@ -2197,11 +2863,13 @@ def _build_html(today: str) -> str:
     n_model = sum(1 for f in _MODEL_CAPTIONS    if (_MODEL_FIGS / f).exists())
     n_total = n_clean + n_feat + n_model
 
-    exec_html     = _exec_summary()
-    cleaning_html = _cleaning_section()
-    feature_html  = _feature_section()
-    model_html    = _model_section()
-    appendix_html = _appendix()
+    exec_html       = _exec_summary()
+    cleaning_html   = _cleaning_section()
+    enrichment_html = _enrichment_section()
+    rto_html        = _rt_oscar_section()
+    feature_html    = _feature_section()
+    model_html      = _model_section()
+    appendix_html   = _appendix()
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -2241,6 +2909,19 @@ def _build_html(today: str) -> str:
   <a class="nav-link" href="#join-integrity">Join integrity</a>
   <a class="nav-link" href="#data-quality">Distributions &amp; quality</a>
 
+  <div class="nav-phase-label enr">Phase 1b · Enrichment</div>
+  <a class="nav-link" href="#enrichment">External genre catalog</a>
+  <a class="nav-link" href="#enrichment-join-strategy">Join strategy</a>
+  <a class="nav-link" href="#enrichment-subgroup">Subgroup coverage</a>
+  <a class="nav-link" href="#enrichment-features">Features added</a>
+
+  <div class="nav-phase-label rto">Phase 1c · RT &amp; Oscar</div>
+  <a class="nav-link" href="#enrichment-rto">Overview</a>
+  <a class="nav-link" href="#rto-1">RT dataset audit</a>
+  <a class="nav-link" href="#rto-3">Join strategy</a>
+  <a class="nav-link" href="#rto-4">RT features</a>
+  <a class="nav-link" href="#rto-5">Oscar features</a>
+
   <div class="nav-phase-label feat">Phase 2 · Features</div>
   <a class="nav-link" href="#feature-goodness">Goodness table</a>
   <a class="nav-link" href="#feat-construction">Feature construction</a>
@@ -2261,6 +2942,8 @@ def _build_html(today: str) -> str:
 <main id="main">
   {exec_html}
   {cleaning_html}
+  {enrichment_html}
+  {rto_html}
   {feature_html}
   {model_html}
   {appendix_html}

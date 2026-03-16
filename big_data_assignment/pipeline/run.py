@@ -101,6 +101,13 @@ def _run_enrichment(state: dict, genre_dir: Path) -> dict:
     return state
 
 
+def _run_rt_oscar_enrichment(state: dict) -> dict:
+    from pipeline.enrich_rt_oscar import run as _enrich_rt
+    state = _enrich_rt(state)
+    print("\n[run] RT + Oscar enrichment complete.")
+    return state
+
+
 def _run_features() -> dict:
     from pipeline.feature_engineering import run_feature_pipeline
     state = run_feature_pipeline()
@@ -144,9 +151,13 @@ def main() -> None:
             _run_cleaning()
             if genre_dir is not None:
                 print("=" * 60)
-                print("[run] ── ENRICHMENT ──")
+                print("[run] ── ENRICHMENT (genre) ──")
                 print("=" * 60)
                 state = _run_enrichment(state, genre_dir)
+            print("=" * 60)
+            print("[run] ── ENRICHMENT (RT + Oscar) ──")
+            print("=" * 60)
+            state = _run_rt_oscar_enrichment(state)
 
         elif stage == "features":
             state = _run_features()

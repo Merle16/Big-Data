@@ -160,7 +160,7 @@ def missingness_comparison(
 
     axes[0].set_ylabel("NULL %", fontsize=11, color=TXT, labelpad=8)
     axes[0].legend(loc="upper right", fontsize=9)
-    fig.suptitle("Missingness — raw vs cleaned", fontsize=13, fontweight="bold", color=TXT)
+    fig.suptitle("Missingness: raw vs cleaned (each panel = one split)", fontsize=13, fontweight="bold", color=TXT)
     fig.tight_layout(pad=2.5)
     return fig
 
@@ -255,8 +255,8 @@ def join_coverage(clean_splits: dict[str, pd.DataFrame]) -> plt.Figure:
     ax.barh(col_names, vals, color=colors, alpha=0.88, edgecolor="none")
     ax.axvline(90, color=MUT, linestyle="--", linewidth=1, label="90% threshold")
     ax.set_xlim(0, 112)
-    ax.set_xlabel("% non-null (train)", fontsize=11, color=TXT, labelpad=8)
-    ax.set_title("Join coverage — columns from LEFT JOINs", fontsize=13,
+    ax.set_xlabel("% non-null", fontsize=11, color=TXT, labelpad=8)
+    ax.set_title("Join coverage: LEFT JOIN fill rates (training split)", fontsize=13,
                  fontweight="bold", color=TXT, pad=12)
     ax.title.set_position([0.5, 1.02])
 
@@ -431,6 +431,12 @@ def imputation_summary(raw_splits: dict[str, pd.DataFrame]) -> plt.Figure:
     split_hdrs = [SPLIT_LABELS.get(s, s) + " miss%" for s in splits]
     headers    = ["column", "mechanism"] + split_hdrs + ["strategy", "rationale"]
 
+    # col widths: name=medium, mechanism=narrow, miss%×3=narrow, strategy=medium, rationale=wide
+    n_pct_cols = len(splits)
+    _IW_base = [0.11, 0.08] + [0.07] * n_pct_cols
+    _IW_tail = [0.16, 0.30] if n_pct_cols == 3 else [0.20, 0.34]
+    _IW = _IW_base + _IW_tail
+
     n_rows = len(rows)
     fig, ax = plt.subplots(figsize=(14, max(5, n_rows * 0.45 + 1.8)))
     fig.patch.set_facecolor(BG)
@@ -445,8 +451,10 @@ def imputation_summary(raw_splits: dict[str, pd.DataFrame]) -> plt.Figure:
         cell.set_facecolor("#111111" if r > 0 else "#1a1a1a")
         cell.set_edgecolor(BDR)
         cell.set_text_props(color=TXT if r > 0 else Y)
+        if c < len(_IW):
+            cell.set_width(_IW[c])
 
-    fig.suptitle("Imputation justification — per-column missingness & strategy",
+    fig.suptitle("Imputation justification: per-column missingness and strategy",
                  fontsize=13, fontweight="bold", color=TXT, y=0.97)
     fig.tight_layout(pad=2.5)
     return fig
@@ -625,8 +633,11 @@ def outlier_summary(clean_splits: dict[str, pd.DataFrame]) -> plt.Figure:
             highlight.add(idx)
 
     headers = ["column", "Q1", "Q3", "IQR",
-               "lower_3IQR", "upper_3IQR",
-               "n_below", "n_above", "n_extreme", "decision"]
+               "lower 3IQR", "upper 3IQR",
+               "n below", "n above", "n extreme", "decision"]
+
+    # col widths: name=wide, Q1/Q3/IQR/bounds=narrow, counts=medium, decision=wide
+    _OW = [0.13, 0.06, 0.06, 0.06, 0.08, 0.08, 0.07, 0.07, 0.08, 0.22]
 
     n_rows = len(rows)
     fig, ax = plt.subplots(figsize=(14, max(5, n_rows * 0.45 + 2.0)))
@@ -642,8 +653,10 @@ def outlier_summary(clean_splits: dict[str, pd.DataFrame]) -> plt.Figure:
         cell.set_facecolor("#111111" if r > 0 else "#1a1a1a")
         cell.set_edgecolor(BDR)
         cell.set_text_props(color=TXT if r > 0 else Y)
+        if c < len(_OW):
+            cell.set_width(_OW[c])
 
-    fig.suptitle("Outlier action table — 3×IQR rule on training split",
+    fig.suptitle("Outlier action table: 3×IQR rule, training split",
                  fontsize=13, fontweight="bold", color=TXT, y=0.97)
     fig.tight_layout(pad=2.5)
     return fig
