@@ -35,11 +35,10 @@ except ImportError:
     HAS_XGB = False
 
 # ── paths ──────────────────────────────────────────────────────────────────────
-ROOT      = Path(__file__).resolve().parents[2]   # big_data_assignment/
-PIPELINE  = ROOT / "pipeline"
-PROC      = ROOT / "data" / "processed"            # clean parquets (read-only)
-OUT_FEAT  = PIPELINE / "outputs" / "features"
-OUT_MODELS= PIPELINE / "outputs" / "models"
+ROOT       = Path(__file__).resolve().parents[2]   # big_data_assignment/
+PIPELINE   = ROOT / "pipeline"
+OUT_FEAT   = PIPELINE / "outputs" / "features"
+OUT_MODELS = PIPELINE / "outputs" / "models"
 MODEL_FIG_DIR = OUT_MODELS
 OUT_MODELS.mkdir(parents=True, exist_ok=True)
 

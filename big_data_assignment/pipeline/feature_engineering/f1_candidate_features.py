@@ -644,6 +644,142 @@ def _fig_auteur_derivation(df: pd.DataFrame) -> None:
     plt.close(fig)
 
 
+# ── split feature application ──────────────────────────────────────────────────
+
+_GENRE_TOKENS = [
+    "action", "comedy", "drama", "thriller", "horror", "romance",
+    "adventure", "animation", "crime", "fantasy", "sci-fi", "mystery",
+    "biography", "documentary",
+]
+
+_RT_OSCAR_FILLS = [
+    ("rt_match_flag",          0),
+    ("rt_tomatometer_rating",  np.nan),
+    ("rt_audience_rating",     np.nan),
+    ("rt_tomatometer_count",   np.nan),
+    ("rt_audience_count",      np.nan),
+    ("rt_certified_fresh",     0),
+    ("rt_high",                np.nan),
+    ("rt_score_gap",           np.nan),
+    ("rt_score_gap_abs",       np.nan),
+    ("rt_popularity_log1p",    0),
+]
+
+_OSCAR_COLS = ["oscar_was_nominated", "oscar_was_winner",
+               "oscar_num_nominations", "oscar_num_wins"]
+
+
+def _apply_split_features(
+    split_df: pd.DataFrame,
+    title_group_stats: pd.DataFrame,
+    dir_lookup: Dict[str, float],
+    dir_gm: float,
+    wr_lookup: Dict[str, float],
+    wr_gm: float,
+    ct_lookup: Dict[str, float],
+    ct_gm: float,
+    tfidf_state,
+    all_feat_cols: List[str],
+) -> pd.DataFrame:
+    """
+    Apply the same feature transformations used on training data to a held-out split.
+
+    Uses pre-fitted lookups and TF-IDF state from training — no OOF, no label required.
+    `tfidf_state` is (fitted TfidfVectorizer, hit_centroid ndarray, non_centroid ndarray)
+    or None when training had insufficient label coverage.
+    """
+    feat = add_aggregate_from_parquet(split_df)
+    feat = add_base_features(feat)
+
+    for col in ["startYear", "endYear", "runtimeMinutes", "numVotes", "numVotes_log1p"]:
+        if col in feat.columns:
+            feat[col] = pd.to_numeric(feat[col], errors="coerce")
+
+    # Title group stats — join from training (these are train-set statistics)
+    feat = feat.merge(
+        title_group_stats[["canonical_title", "title_group_size_train",
+                           "title_unique_years_train", "title_conflicting_years"]],
+        on="canonical_title", how="left",
+    )
+    feat["title_group_size_train"]   = feat["title_group_size_train"].fillna(0.0)
+    feat["title_unique_years_train"] = feat["title_unique_years_train"].fillna(1.0)
+    feat["title_conflicting_years"]  = feat["title_conflicting_years"].fillna(0.0)
+
+    # Director / writer hit rates — lookup with global mean fallback
+    def _map_ids(id_col: str, lookup: Dict[str, float], gm: float) -> pd.Series:
+        rates = []
+        if id_col in feat.columns:
+            for val in feat[id_col]:
+                if pd.isna(val) or str(val).strip() == "":
+                    rates.append(gm)
+                else:
+                    tokens = [t.strip() for t in str(val).split(",")
+                              if t.strip() not in ("", r"\N", "\\N")]
+                    rates.append(
+                        float(np.mean([lookup.get(t, gm) for t in tokens]))
+                        if tokens else gm
+                    )
+        else:
+            rates = [gm] * len(feat)
+        return pd.Series(rates, index=feat.index, dtype=float)
+
+    feat["director_hit_rate"] = _map_ids("dir_ids", dir_lookup, dir_gm)
+    feat["writer_hit_rate"]   = _map_ids("wri_ids", wr_lookup, wr_gm)
+
+    # Canonical title hit rate from training lookup
+    feat["canonical_title_hit_rate"] = (
+        feat["canonical_title"].map(ct_lookup).fillna(ct_gm)
+    )
+
+    # Title similarity — apply pre-fitted TF-IDF
+    if tfidf_state is not None:
+        vec, hit_centroid, non_centroid = tfidf_state
+        title_series = feat.get("primaryTitle", pd.Series("", index=feat.index)).fillna("").astype(str)
+        X = vec.transform(title_series)
+        if X.shape[1] > 0:
+            feat["title_sim_to_hit"]     = cosine_similarity(X, hit_centroid).ravel()
+            feat["title_sim_to_non_hit"] = cosine_similarity(X, non_centroid).ravel()
+            feat["title_sim_margin"]     = feat["title_sim_to_hit"] - feat["title_sim_to_non_hit"]
+        else:
+            feat["title_sim_to_hit"] = feat["title_sim_to_non_hit"] = feat["title_sim_margin"] = 0.0
+    else:
+        feat["title_sim_to_hit"] = feat["title_sim_to_non_hit"] = feat["title_sim_margin"] = 0.0
+
+    # Genre features
+    if "genre_match_flag" in feat.columns:
+        feat["genre_match_flag"] = (
+            pd.to_numeric(feat["genre_match_flag"], errors="coerce").fillna(0).astype(int)
+        )
+        if "genre_token_count" in feat.columns:
+            feat["genre_token_count"] = pd.to_numeric(feat["genre_token_count"], errors="coerce").fillna(0)
+        for _gc in ["genre_center_year", "genre_center_runtime", "genre_center_rating"]:
+            if _gc in feat.columns:
+                feat[_gc] = pd.to_numeric(feat[_gc], errors="coerce")
+        if "genre_labels" in feat.columns:
+            labels_lower = feat["genre_labels"].fillna("").str.lower()
+            for _tok in _GENRE_TOKENS:
+                _col = f"is_{_tok.replace('-', '_')}"
+                feat[_col] = labels_lower.str.contains(_tok, regex=False).astype(int)
+
+    # RT + Oscar features
+    if "rt_match_flag" in feat.columns:
+        for _col, _fill in _RT_OSCAR_FILLS:
+            if _col not in feat.columns:
+                continue
+            feat[_col] = pd.to_numeric(feat[_col], errors="coerce").fillna(_fill)
+        for _col in _OSCAR_COLS:
+            if _col not in feat.columns:
+                continue
+            feat[_col] = pd.to_numeric(feat[_col], errors="coerce").fillna(0).astype(int)
+
+    # Select the same columns that the training matrix uses
+    save_feat_cols = [c for c in all_feat_cols if c in feat.columns]
+    out_cols = ["tconst"] + save_feat_cols
+    if "label" in feat.columns:
+        out_cols = ["tconst", "label"] + [c for c in save_feat_cols if c != "label"]
+    return feat[[c for c in out_cols if c in feat.columns]].copy()
+
+
 # ── main run ───────────────────────────────────────────────────────────────────
 
 def run(state: dict) -> dict:
@@ -736,11 +872,6 @@ def run(state: dict) -> dict:
         dir_lookup, dir_gm, wr_lookup, wr_gm = {}, 0.0, {}, 0.0
 
     # ── 6b. Genre features (only when enrichment parquet was written) ─────────
-    _GENRE_TOKENS = [
-        "action", "comedy", "drama", "thriller", "horror", "romance",
-        "adventure", "animation", "crime", "fantasy", "sci-fi", "mystery",
-        "biography", "documentary",
-    ]
     genre_feat_cols: List[str] = []
     if "genre_match_flag" in train_feat.columns:
         train_feat["genre_match_flag"] = (
@@ -774,25 +905,13 @@ def run(state: dict) -> dict:
     # ── 6c. RT + Oscar features (only when enrichment parquet was written) ────
     rt_oscar_feat_cols: List[str] = []
     if "rt_match_flag" in train_feat.columns:
-        for _col, _fill in [
-            ("rt_match_flag",          0),
-            ("rt_tomatometer_rating",  np.nan),
-            ("rt_audience_rating",     np.nan),
-            ("rt_tomatometer_count",   np.nan),
-            ("rt_audience_count",      np.nan),
-            ("rt_certified_fresh",     0),
-            ("rt_high",                np.nan),
-            ("rt_score_gap",           np.nan),
-            ("rt_score_gap_abs",       np.nan),
-            ("rt_popularity_log1p",    0),
-        ]:
+        for _col, _fill in _RT_OSCAR_FILLS:
             if _col not in train_feat.columns:
                 continue
             train_feat[_col] = pd.to_numeric(train_feat[_col], errors="coerce").fillna(_fill)
             rt_oscar_feat_cols.append(_col)
 
-        for _col in ["oscar_was_nominated", "oscar_was_winner",
-                     "oscar_num_nominations", "oscar_num_wins"]:
+        for _col in _OSCAR_COLS:
             if _col not in train_feat.columns:
                 continue
             train_feat[_col] = pd.to_numeric(train_feat[_col], errors="coerce").fillna(0).astype(int)
@@ -862,6 +981,78 @@ def run(state: dict) -> dict:
     # to disk so the state path and the file path are identical in content.
     state["train_feat"]      = train_feat
     state["features_train"]  = out_df
+
+    # ── 10. Build val / test feature matrices using training-fitted state ──────
+    # Prepare shared artefacts derived from training data only.
+
+    # Title group stats table (canonical_title → group-level train stats)
+    _ct_grp = (
+        train_feat.groupby("canonical_title", dropna=False)
+        .agg(
+            title_group_size_train=("canonical_title", "size"),
+            title_unique_years_train=("startYear", lambda s: float(s.dropna().nunique())),
+        )
+        .reset_index()
+    )
+    _ct_grp["title_conflicting_years"] = (
+        _ct_grp["title_unique_years_train"] > 1
+    ).astype(float)
+
+    # Full (non-OOF) canonical title hit-rate lookup for val/test rows
+    _ct_gm: float = 0.0
+    _ct_lookup: Dict[str, float] = {}
+    if "label" in train_feat.columns and "canonical_title" in train_feat.columns:
+        _smoothing = 20.0
+        _ct_gm     = float(train_feat["label"].mean())
+        _ct_hits   = train_feat.groupby("canonical_title")["label"].agg(["sum", "count"])
+        _ct_lookup = {
+            ct: float((row["sum"] + _smoothing * _ct_gm) / (row["count"] + _smoothing))
+            for ct, row in _ct_hits.iterrows()
+        }
+
+    # TF-IDF state — refit vectoriser on training titles
+    _tfidf_state = None
+    if "label" in train_feat.columns and "primaryTitle" in train_feat.columns:
+        _y_tr     = pd.to_numeric(train_feat["label"], errors="coerce")
+        _hit_mask = _y_tr.eq(1).to_numpy()
+        _non_mask = _y_tr.eq(0).to_numpy()
+        if _hit_mask.sum() > 0 and _non_mask.sum() > 0:
+            _title_series = train_feat["primaryTitle"].fillna("").astype(str)
+            _vec = TfidfVectorizer(lowercase=True, ngram_range=(1, 2), min_df=2, max_features=5000)
+            _X   = _vec.fit_transform(_title_series)
+            if _X.shape[1] > 0:
+                _hit_centroid = np.asarray(_X[_hit_mask].mean(axis=0))
+                _non_centroid = np.asarray(_X[_non_mask].mean(axis=0))
+                _tfidf_state  = (_vec, _hit_centroid, _non_centroid)
+
+    for _split_name, _split_fp, _out_stem in [
+        ("val",  PROC / "validation_hidden_clean.parquet", "features_val"),
+        ("test", PROC / "test_hidden_clean.parquet",       "features_test"),
+    ]:
+        if not _split_fp.exists():
+            print(f"[f1] {_split_fp.name} not found — skipping {_out_stem}.")
+            continue
+        _split_df = pd.read_parquet(_split_fp)
+        print(f"[f1] Building {_out_stem}  input shape={_split_df.shape}")
+        _split_feat = _apply_split_features(
+            _split_df,
+            _ct_grp,
+            state.get("dir_lookup", dir_lookup),
+            state.get("dir_gm",     dir_gm),
+            state.get("wr_lookup",  wr_lookup),
+            state.get("wr_gm",      wr_gm),
+            _ct_lookup, _ct_gm,
+            _tfidf_state,
+            all_feat_cols,
+        )
+        _split_feat.to_parquet(OUT_FEAT / f"{_out_stem}.parquet", index=False)
+        _split_feat.to_csv(OUT_FEAT / f"{_out_stem}.csv", index=False)
+        print(
+            f"[f1] Saved {_out_stem}.parquet + .csv  "
+            f"({len(_split_feat)} rows x {len(_split_feat.columns) - 1} features)"
+        )
+        state[f"features_{_split_name}"] = _split_feat
+
     return state
 
 

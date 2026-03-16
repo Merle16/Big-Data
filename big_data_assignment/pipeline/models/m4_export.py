@@ -35,12 +35,11 @@ except ImportError:
     HAS_XGB = False
 
 # ── paths ──────────────────────────────────────────────────────────────────────
-ROOT      = Path(__file__).resolve().parents[2]   # big_data_assignment/
-PIPELINE  = ROOT / "pipeline"
-PROC      = ROOT / "data" / "processed"            # clean parquets (read-only)
-OUT_FEAT  = PIPELINE / "outputs" / "features"
-OUT_MODELS= PIPELINE / "outputs" / "models"
-MODEL_FIG_DIR = OUT_MODELS
+ROOT       = Path(__file__).resolve().parents[2]   # big_data_assignment/
+PIPELINE   = ROOT / "pipeline"
+OUT_FEAT   = PIPELINE / "outputs" / "features"
+OUT_MODELS = PIPELINE / "outputs" / "models"
+MODEL_FIG_DIR  = OUT_MODELS
 OUT_MODELS.mkdir(parents=True, exist_ok=True)
 
 # ── constants ──────────────────────────────────────────────────────────────────
@@ -259,6 +258,49 @@ def run(state: dict) -> dict:
             print(f"[m4_export] Saved predictions_val.csv  "
                   f"({len(val_pred_df)} rows, AUC={val_auc:.4f})")
 
+    # ── predictions on real val / test splits (submission files) ───────────────
+    _active_model = None
+    _active_type  = "logistic"
+    if log_model is not None or xgb_model is not None:
+        _active_type  = (
+            "xgboost" if (best_model or "").lower() == "xgboost" and xgb_model else "logistic"
+        )
+        _active_model = xgb_model if _active_type == "xgboost" else log_model
+
+    if _active_model is not None and feat_cols is not None:
+        for _split_name, _out_name in [
+            ("val",  "predictions_val_submission.csv"),
+            ("test", "predictions_test.csv"),
+        ]:
+            _fp = OUT_FEAT / f"features_{_split_name}.parquet"
+            if not _fp.exists():
+                _fp = OUT_FEAT / f"features_{_split_name}.csv"
+                if not _fp.exists():
+                    print(f"[m4_export] features_{_split_name} not found — skipping {_out_name}.")
+                    continue
+            _df = pd.read_parquet(_fp) if str(_fp).endswith(".parquet") else pd.read_csv(_fp)
+            for _c in _df.columns:
+                if _c not in ("tconst", "label"):
+                    _df[_c] = pd.to_numeric(_df[_c], errors="coerce")
+
+            _cols = [c for c in feat_cols if c in _df.columns]
+            _X    = _df[_cols].copy()
+            # Fill any remaining NaNs with column medians (XGBoost handles NaN natively,
+            # but LogisticRegression requires finite values)
+            if _active_type != "xgboost":
+                for _c in _cols:
+                    _med = float(_X[_c].median()) if _X[_c].notna().sum() > 0 else 0.0
+                    _X[_c] = _X[_c].fillna(_med)
+                if scaler is not None:
+                    _X = pd.DataFrame(scaler.transform(_X), columns=_cols, index=_X.index)
+
+            _probs  = _active_model.predict_proba(_X)[:, 1]
+            _out_df = _df[["tconst"]].copy()
+            _out_df["predicted_prob"]  = _probs
+            _out_df["predicted_label"] = (_probs >= 0.5).astype(int)
+            _out_df.to_csv(OUT_MODELS / _out_name, index=False)
+            print(f"[m4_export] Saved {_out_name}  ({len(_out_df)} rows)")
+
     # ── manifest ───────────────────────────────────────────────────────────────
     manifest = _build_manifest(OUT_MODELS)
     manifest.to_csv(OUT_MODELS / "pipeline_manifest.csv", index=False)
@@ -295,7 +337,7 @@ def run(state: dict) -> dict:
     n_artifacts = len(manifest)
     print(
         f"\n[m4_export] Pipeline complete.\n"
-        f"  Artifacts : {n_artifacts} files in data/processed/\n"
+        f"  Artifacts : {n_artifacts} files in {OUT_MODELS}\n"
         f"  Best model: {best_model}\n"
         f"  Val AUC   : {val_auc:.4f}\n"
         f"  Keep-set  : {len(keep_set) if keep_set else '—'} features"

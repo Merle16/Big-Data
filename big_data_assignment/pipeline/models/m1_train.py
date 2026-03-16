@@ -45,11 +45,10 @@ except ImportError:
     HAS_XGB = False
 
 # ── paths ──────────────────────────────────────────────────────────────────────
-ROOT      = Path(__file__).resolve().parents[2]   # big_data_assignment/
-PIPELINE  = ROOT / "pipeline"
-PROC      = ROOT / "data" / "processed"            # clean parquets (read-only)
-OUT_FEAT  = PIPELINE / "outputs" / "features"
-OUT_MODELS= PIPELINE / "outputs" / "models"
+ROOT       = Path(__file__).resolve().parents[2]   # big_data_assignment/
+PIPELINE   = ROOT / "pipeline"
+OUT_FEAT   = PIPELINE / "outputs" / "features"
+OUT_MODELS = PIPELINE / "outputs" / "models"
 MODEL_FIG_DIR = OUT_MODELS
 OUT_MODELS.mkdir(parents=True, exist_ok=True)
 
@@ -515,7 +514,7 @@ def run(state: dict) -> dict:
 
     print(f"[m1_train] Logistic AUC={log_auc:.4f}  XGB AUC={xgb_auc}  Best={best}")
     print(f"[m1_train] Figures saved to {MODEL_FIG_DIR}")
-    print(f"[m1_train] Artifacts saved to {PROC}")
+    print(f"[m1_train] Artifacts saved to {OUT_MODELS}")
     return state
 
 
