@@ -1,0 +1,16 @@
+missingness_indicator,imdb_field,n_valid,point_biserial_r,t_stat,p_value,significant_p05
+join_miss (rt_match_flag=0),startYear,7959,0.0273,2.44,0.0147,True
+join_miss (rt_match_flag=0),runtimeMinutes,7959,0.0214,1.914,0.0557,False
+join_miss (rt_match_flag=0),numVotes_log1p,7959,-0.458,-45.958,0.0,True
+within_miss (rt_tomatometer_rating),startYear,2312,,,,
+within_miss (rt_tomatometer_rating),runtimeMinutes,2312,,,,
+within_miss (rt_tomatometer_rating),numVotes_log1p,2312,,,,
+within_miss (rt_audience_rating),startYear,2312,0.0507,2.441,0.0147,True
+within_miss (rt_audience_rating),runtimeMinutes,2312,-0.0286,-1.377,0.1686,False
+within_miss (rt_audience_rating),numVotes_log1p,2312,-0.0219,-1.052,0.2928,False
+within_miss (rt_tomatometer_count),startYear,2312,,,,
+within_miss (rt_tomatometer_count),runtimeMinutes,2312,,,,
+within_miss (rt_tomatometer_count),numVotes_log1p,2312,,,,
+within_miss (rt_audience_count),startYear,2312,0.0507,2.441,0.0147,True
+within_miss (rt_audience_count),runtimeMinutes,2312,-0.0286,-1.377,0.1686,False
+within_miss (rt_audience_count),numVotes_log1p,2312,-0.0219,-1.052,0.2928,False

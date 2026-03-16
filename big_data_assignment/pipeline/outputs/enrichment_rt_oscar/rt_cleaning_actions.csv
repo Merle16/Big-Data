@@ -1,0 +1,8 @@
+step,affected_rows,detail
+trim_whitespace_text,5,Stripped leading/trailing whitespace in text fields
+replace_disguised_missing_tokens,9,Replaced disguised null-like tokens with NA
+parse_numeric_columns,0,Values that failed numeric parsing set to NA
+parse_date_columns,0,Values that failed date parsing set to NA
+apply_domain_validations,0,Out-of-domain numeric values set to NA
+drop_exact_duplicates,1,Removed exact duplicate rows
+derive_join_and_feature_columns,16637,"Added title_key, rt_year, runtime_rt, rt_high, rt_certified_fresh"

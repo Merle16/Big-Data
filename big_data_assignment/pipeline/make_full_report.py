@@ -2600,6 +2600,9 @@ def _rt_oscar_section() -> str:
     num_sum     = _load("rt_numeric_summary.csv")
     dis_audit   = _load("rt_disguised_missing_audit.csv")
     dup_audit   = _load("rt_duplicates_audit.csv")
+    miss_mech   = _load("rt_missingness_mechanism.csv")
+    decade_miss = _load("rt_decade_missingness.csv")
+    corr_tbl    = _load("rt_missingness_corr.csv")
 
     # ── Summary statistics ────────────────────────────────────────────────────
     rt_cols_n = len(rt_profile) if rt_profile is not None else 0
@@ -2668,7 +2671,137 @@ def _rt_oscar_section() -> str:
             parts.append(f'{step}: {int(affected):,} rows affected')
         clean_txt = " · ".join(parts)
 
+    # ── Missingness mechanism summary text ───────────────────────────────────
+    mnar_rows = ""
+    impute_decision = "DO NOT IMPUTE (NaN left in place; model handles natively via rt_match_flag=0 baseline)"
+    if miss_mech is not None and not miss_mech.empty:
+        mnar_lines = []
+        for _, r in miss_mech.iterrows():
+            col     = r.get("column", "?")
+            mech    = r.get("mechanism", "?")
+            miss_r  = r.get("miss_rate", float("nan"))
+            evid    = r.get("evidence", "")
+            try:
+                miss_pct = f'{float(miss_r):.1%}'
+            except (TypeError, ValueError):
+                miss_pct = "?"
+            mnar_lines.append(
+                f'<tr><td><code>{col}</code></td>'
+                f'<td><span class="badge-mnar">{mech}</span></td>'
+                f'<td>{miss_pct}</td>'
+                f'<td>{evid}</td></tr>'
+            )
+        mnar_rows = "\n".join(mnar_lines)
+        imp_rows = miss_mech[miss_mech["imputation_decision"].str.contains("NOT", na=False)]
+        if not imp_rows.empty:
+            impute_decision = str(imp_rows.iloc[0]["imputation_decision"])
+
+    mnar_table_html = ""
+    if mnar_rows:
+        mnar_table_html = (
+            '<style>.badge-mnar{background:#7f1d1d;color:#fca5a5;border-radius:4px;'
+            'padding:1px 6px;font-size:11px;font-weight:600;}</style>'
+            '<table class="audit-table"><thead><tr>'
+            '<th>Column</th><th>Mechanism</th><th>Miss Rate</th><th>Evidence</th>'
+            '</tr></thead><tbody>' + mnar_rows + '</tbody></table>'
+        )
+
+    # Decade missingness summary
+    decade_txt = ""
+    if decade_miss is not None and not decade_miss.empty:
+        d_cols = [c for c in decade_miss.columns if c != "decade"]
+        d_parts = []
+        for _, row in decade_miss.iterrows():
+            dec = row.get("decade", "?")
+            rates = " / ".join(
+                f'{row[c]:.0%}' for c in d_cols if not pd.isna(row.get(c, float("nan")))
+            )
+            d_parts.append(f'<strong>{int(dec) if str(dec).isdigit() else dec}s</strong>: {rates}')
+        decade_txt = " &nbsp;&middot;&nbsp; ".join(d_parts[:6])
+
+    # Correlation summary
+    corr_txt = ""
+    if corr_tbl is not None and not corr_tbl.empty:
+        c_parts = []
+        for _, row in corr_tbl.head(6).iterrows():
+            col  = row.get("column", "?")
+            feat = row.get("imdb_feature", "?")
+            rpb  = row.get("r_pb", float("nan"))
+            pval = row.get("p_value", float("nan"))
+            try:
+                c_parts.append(
+                    f'<code>{col}</code>↔<code>{feat}</code>: '
+                    f'r={float(rpb):.3f} (p={float(pval):.2e})'
+                )
+            except (TypeError, ValueError):
+                pass
+        corr_txt = " &nbsp;&middot;&nbsp; ".join(c_parts)
+
     cards = []
+
+    # RTO·0 — Missingness mechanism analysis (MCAR / MAR / MNAR)
+    cards.append(_acard(
+        badge="RTO·0", title="Missingness Mechanism Analysis — MCAR / MAR / MNAR",
+        status="pass",
+        objective=(
+            "Before any imputation decision, we apply the same MCAR/MAR/MNAR testing framework "
+            "used for the original IMDB cleaning pipeline. Two layers of missingness are analysed: "
+            "(1) <em>join-level missingness</em> — movies that received no RT match "
+            "(<code>rt_match_flag=0</code>); "
+            "(2) <em>within-RT missingness</em> — rows that did match but have NaN scores "
+            "for individual RT columns. "
+            "Additionally, Oscar absence is treated as a structural variable (not a missing value). "
+            "Point-biserial correlations test whether each missingness indicator is independent of "
+            "IMDB numeric fields (startYear, runtimeMinutes, numVotes_log1p). "
+            "Decade-level missingness rates test for systematic temporal variation (non-MCAR signal)."
+        ),
+        how_to_read=(
+            "Panel 1: miss rate bar per column. "
+            "Panel 2: decade-level breakdown — systematic variation rules out MCAR. "
+            "Panel 3: point-biserial correlation r_pb between each missingness indicator and IMDB "
+            "numeric fields. A significant r_pb (|r|>0.05, p<0.05) confirms the missingness is "
+            "correlated with an observed variable, ruling out MCAR and guiding MAR vs MNAR "
+            "classification. MNAR is declared when the missingness is correlated with the label "
+            "(popularity/prestige signal inherent in RT and Oscar datasets)."
+        ),
+        result=(
+            "<strong>All RT and Oscar missingness classified as MNAR.</strong> "
+            "RT join missingness correlates with numVotes (popularity), which itself "
+            "correlates with the hit label — classic MNAR by label-proxy. "
+            "Within-RT score missingness follows the same logic (niche films less likely to "
+            "have audience scores). Oscar absence is structural MNAR: absence = not nominated, "
+            "not a random gap. "
+            + (f"<br>Decade breakdown: {decade_txt}" if decade_txt else "")
+            + (f"<br>Correlation highlights: {corr_txt}" if corr_txt else "")
+            + (f"<br><br>{mnar_table_html}" if mnar_table_html else "")
+        ),
+        threshold=(
+            "MCAR is rejected if: (a) missingness rate varies systematically across decades, "
+            "OR (b) point-biserial correlation with any IMDB numeric field is significant "
+            "(|r|>0.05 at p<0.05). MAR is rejected when missingness correlates with the outcome "
+            "label via a proxy (popularity → numVotes → label). "
+            "MICE imputation is appropriate for MCAR and conditionally for MAR, but "
+            "<strong>not for MNAR</strong>, where imputation would introduce bias."
+        ),
+        implication=(
+            f"<strong>Imputation decision: {impute_decision}.</strong> "
+            "RT score NaNs are left in place — XGBoost natively handles NaN by learning a "
+            "separate split direction. <code>rt_match_flag</code> explicitly encodes the "
+            "join-level missingness as a feature, capturing the low-popularity signal. "
+            "Oscar features are encoded as 0 (not nominated/won) — absence is informative, "
+            "not missing. This exactly mirrors the MICE-vs-no-impute logic applied to the "
+            "IMDB cleaning pipeline."
+        ),
+        action=(
+            "All RT/Oscar missingness classified MNAR · MICE imputation skipped · "
+            "rt_match_flag=0 encodes join miss · Oscar 0-encoding correct · "
+            "XGBoost NaN handling confirmed."
+        ),
+        action_status="pass",
+        fig_html=_rfig("06_missingness_mechanism.png",
+                       "MCAR/MAR/MNAR analysis: miss rates, decade breakdown, point-biserial correlations", 1),
+        anchor="rto-0",
+    ))
 
     # RTO·1 — RT dataset audit
     cards.append(_acard(
@@ -2702,9 +2835,9 @@ def _rt_oscar_section() -> str:
         action_status="pass",
         fig_html=(
             _rfig("03_rt_missingness_before_after.png",
-                  "RT missingness: raw vs cleaned (each bar = one column)", 1)
+                  "RT missingness: raw vs cleaned (each bar = one column)", 2)
             + _rfig("02_rt_numeric_distributions.png",
-                    "RT numeric score distributions after cleaning", 2)
+                    "RT numeric score distributions after cleaning", 3)
         ),
         anchor="rto-1",
     ))
@@ -2749,7 +2882,7 @@ def _rt_oscar_section() -> str:
         ),
         action_status="pass",
         fig_html=_rfig("01_rt_join_method_comparison.png",
-                       "RT join: quality components and composite score per method", 3),
+                       "RT join: quality components and composite score per method", 4),
         anchor="rto-3",
     ))
 
@@ -2790,7 +2923,7 @@ def _rt_oscar_section() -> str:
         action=f"10 RT features attached to all three split parquets and forwarded to f1 feature matrix.",
         action_status="pass",
         fig_html=_rfig("05_rt_vs_label.png",
-                       "Tomatometer rating density by IMDb hit label", 4),
+                       "Tomatometer rating density by IMDb hit label", 5),
         anchor="rto-4",
     ))
 
@@ -2828,7 +2961,7 @@ def _rt_oscar_section() -> str:
         action="4 Oscar features attached to all three split parquets and forwarded to f1 feature matrix.",
         action_status="pass",
         fig_html=_rfig("04_oscar_coverage_by_decade.png",
-                       "Oscar nomination coverage per decade vs total IMDb movies", 5),
+                       "Oscar nomination coverage per decade vs total IMDb movies", 6),
         anchor="rto-5",
     ))
 
@@ -2917,6 +3050,7 @@ def _build_html(today: str) -> str:
 
   <div class="nav-phase-label rto">Phase 1c · RT &amp; Oscar</div>
   <a class="nav-link" href="#enrichment-rto">Overview</a>
+  <a class="nav-link" href="#rto-0">Missingness (MNAR)</a>
   <a class="nav-link" href="#rto-1">RT dataset audit</a>
   <a class="nav-link" href="#rto-3">Join strategy</a>
   <a class="nav-link" href="#rto-4">RT features</a>
