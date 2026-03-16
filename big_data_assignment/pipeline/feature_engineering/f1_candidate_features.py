@@ -1027,20 +1027,15 @@ def run(state: dict) -> dict:
             for ct, row in _ct_hits.iterrows()
         }
 
-    # TF-IDF state — refit vectoriser on training titles
-    _tfidf_state = None
-    if "label" in train_feat.columns and "primaryTitle" in train_feat.columns:
-        _y_tr     = pd.to_numeric(train_feat["label"], errors="coerce")
-        _hit_mask = _y_tr.eq(1).to_numpy()
-        _non_mask = _y_tr.eq(0).to_numpy()
-        if _hit_mask.sum() > 0 and _non_mask.sum() > 0:
-            _title_series = train_feat["primaryTitle"].fillna("").astype(str)
-            _vec = TfidfVectorizer(lowercase=True, ngram_range=(1, 2), min_df=2, max_features=5000)
-            _X   = _vec.fit_transform(_title_series)
-            if _X.shape[1] > 0:
-                _hit_centroid = np.asarray(_X[_hit_mask].mean(axis=0))
-                _non_centroid = np.asarray(_X[_non_mask].mean(axis=0))
-                _tfidf_state  = (_vec, _hit_centroid, _non_centroid)
+    # TF-IDF state — use artifacts from add_title_similarity_features (already fitted above)
+    _tfidf_vec   = state.get("tfidf_vec")
+    _hit_cent    = state.get("hit_centroid")
+    _non_cent    = state.get("non_centroid")
+    _tfidf_state = (
+        (_tfidf_vec, _hit_cent, _non_cent)
+        if _tfidf_vec is not None and _hit_cent is not None and _non_cent is not None
+        else None
+    )
 
     for _split_name, _split_fp, _out_stem in [
         ("val",  PROC / "validation_hidden_clean.parquet", "features_val"),
