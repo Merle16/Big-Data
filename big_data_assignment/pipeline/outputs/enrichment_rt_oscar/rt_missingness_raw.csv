@@ -11,8 +11,8 @@ raw,directors,0.6851785070320953
 raw,movie_info,0.144248106743599
 raw,genre,0.10217574227671594
 raw,on_streaming_date,0.012020675561966582
-raw,movie_title,0.0
-raw,rating,0.0
 raw,tomatometer_status,0.0
-raw,tomatometer_count,0.0
 raw,tomatometer_rating,0.0
+raw,tomatometer_count,0.0
+raw,rating,0.0
+raw,movie_title,0.0

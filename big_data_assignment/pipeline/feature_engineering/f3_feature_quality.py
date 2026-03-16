@@ -227,7 +227,11 @@ def compute_goodness(
 # ── figures ────────────────────────────────────────────────────────────────────
 
 def _fig_goodness_heatmap(diag: pd.DataFrame) -> None:
-    import seaborn as sns
+    try:
+        import seaborn as sns
+        cmap = sns.diverging_palette(15, 145, s=80, l=40, as_cmap=True)
+    except ImportError:
+        cmap = plt.get_cmap("RdYlGn")
     metric_cols = [
         "univariate_auc_val", "mutual_info", "abs_spearman_val",
         "psi_train_vs_val", "goodness_score",
@@ -242,7 +246,6 @@ def _fig_goodness_heatmap(diag: pd.DataFrame) -> None:
 
     n_features = len(df)
     fig, ax = plt.subplots(figsize=(14, max(6, n_features * 0.55)))
-    cmap = sns.diverging_palette(15, 145, s=80, l=40, as_cmap=True)
     im = ax.imshow(df_n.values, cmap=cmap, aspect="auto", vmin=0, vmax=1)
     ax.set_xticks(range(len(metric_cols)))
     ax.set_xticklabels(metric_cols, rotation=30, ha="right", fontsize=9)
