@@ -197,10 +197,11 @@ def _fig_network(pr: pd.DataFrame, prin: pd.DataFrame, train: pd.DataFrame,
                  top_n: int = 40) -> None:
     """
     Poster-quality collaboration network.
-    - Nodes graded from dark grey (low PR) → IMDB yellow (highest PR)
-    - Edge colour and alpha scale with hit-collaboration weight
-    - kamada_kawai layout for clean, even spacing
-    - Glow effect: draw each node twice (large+dim then small+bright)
+    - Node colour = role (fixed, always readable from legend)
+    - Node size   = PageRank score
+    - Edge width & opacity scale with hit-collaboration weight (min visible)
+    - Clear role legend, edge key annotation
+    - No halo/glow — single crisp draw
     """
     import matplotlib.colors as mcolors
 
@@ -245,96 +246,103 @@ def _fig_network(pr: pd.DataFrame, prin: pd.DataFrame, train: pd.DataFrame,
     except Exception:
         pos = nx.spring_layout(G, seed=42, k=4.0 / np.sqrt(len(G.nodes)))
 
-    # Spread positions wider for breathing room
-    pos = {n: (x * 2.2, y * 2.2) for n, (x, y) in pos.items()}
+    pos = {n: (x * 2.4, y * 2.4) for n, (x, y) in pos.items()}
 
-    # ── Node colours: dark grey → IMDB yellow gradient by PageRank ────────────
-    # Role base colours — blended toward IMDB yellow as PageRank rises
-    ROLE_BASE = {
-        "director": np.array(mcolors.to_rgb("#DBA506")),
-        "writer":   np.array(mcolors.to_rgb("#D0FEF5")),
-        "actor":    np.array(mcolors.to_rgb("#007991")),
-        "actress":  np.array(mcolors.to_rgb("#C41E3D")),
+    # ── Node colours: fixed per role ──────────────────────────────────────────
+    ROLE_COLORS = {
+        "director": "#DBA506",
+        "writer":   "#D0FEF5",
+        "actor":    "#007991",
+        "actress":  "#C41E3D",
     }
-    IMDB_Y = np.array(mcolors.to_rgb("#F5C518"))
-    DIM    = np.array(mcolors.to_rgb("#1a1a1a"))
-
-    def _node_color(node_pr: float, role: str) -> tuple:
-        t    = (node_pr - pr_min) / max(pr_max - pr_min, 1e-12)
-        t    = t ** 0.5
-        base = ROLE_BASE.get(role, DIM)
-        # Low PR → role colour; high PR → IMDB yellow
-        return tuple(base + t * (IMDB_Y - base))
-
     nodes        = list(G.nodes)
     node_pr_vals = [G.nodes[n].get("pr", pr_min) for n in nodes]
     node_roles   = [G.nodes[n].get("role", "actor") for n in nodes]
-    node_colors  = [_node_color(v, r) for v, r in zip(node_pr_vals, node_roles)]
-    # Size: 400 (lowest) → 4000 (highest)
-    node_sizes   = [400 + 3600 * ((v - pr_min) / max(pr_max - pr_min, 1e-12)) ** 0.6
+    node_colors  = [ROLE_COLORS.get(r, "#888888") for r in node_roles]
+    # Size: 600 (lowest) → 5000 (highest)
+    node_sizes   = [600 + 4400 * ((v - pr_min) / max(pr_max - pr_min, 1e-12)) ** 0.55
                     for v in node_pr_vals]
 
-    # ── Edge colours: weight → alpha + brightness ─────────────────────────────
+    # ── Edges: width & alpha scale with weight, minimum always visible ─────────
     edge_list    = list(G.edges)
     edge_weights = [G[u][v].get("weight", 0) for u, v in edge_list]
     max_w        = max(edge_weights) if edge_weights else 1
-    edge_alphas  = [0.15 + 0.75 * (w / max_w) for w in edge_weights]
-    edge_widths  = [0.5  + 4.5  * (w / max_w) for w in edge_weights]
-    # Colour: dim silver → bright IMDB yellow
+    edge_widths  = [1.2 + 5.8 * (w / max_w) for w in edge_weights]   # min 1.2
+    edge_alphas  = [0.40 + 0.50 * (w / max_w) for w in edge_weights]  # min 0.40
     def _edge_color(w: float) -> str:
         t = w / max_w
-        r = int(0x33 + t * (0xF5 - 0x33))
-        g = int(0x33 + t * (0xC5 - 0x33))
-        b = int(0x33 + t * (0x18 - 0x33))
+        r = int(0x55 + t * (0xF5 - 0x55))
+        g = int(0x55 + t * (0xC5 - 0x55))
+        b = int(0x66 + t * (0x18 - 0x66))
         return f"#{r:02x}{g:02x}{b:02x}"
     edge_colors = [_edge_color(w) for w in edge_weights]
 
     # ── Draw ──────────────────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(22, 18))
-    ax.set_facecolor("#050505")
-    fig.patch.set_facecolor("#050505")
+    ax.set_facecolor("#060810")
+    fig.patch.set_facecolor("#060810")
 
-    # Edges — draw dim wide first (glow), then crisp on top
-    for (u, v), col, w, a in zip(edge_list, edge_colors, edge_widths, edge_alphas):
+    # Edges — single crisp draw
+    for (u, v), col, lw, a in zip(edge_list, edge_colors, edge_widths, edge_alphas):
         x0, y0 = pos[u]; x1, y1 = pos[v]
-        ax.plot([x0, x1], [y0, y1], color=col, linewidth=w * 2.2,
-                alpha=a * 0.25, solid_capstyle="round", zorder=1)
-        ax.plot([x0, x1], [y0, y1], color=col, linewidth=w,
-                alpha=a, solid_capstyle="round", zorder=2)
+        ax.plot([x0, x1], [y0, y1], color=col, linewidth=lw,
+                alpha=a, solid_capstyle="round", zorder=1)
 
-    # Nodes — glow halo then crisp fill
+    # Nodes — single draw with dark border
     for n, col, sz in zip(nodes, node_colors, node_sizes):
         x, y = pos[n]
-        ax.scatter(x, y, s=sz * 2.5, color=col, alpha=0.18, zorder=3,
-                   linewidths=0)
-        ax.scatter(x, y, s=sz, color=col, alpha=0.95, zorder=4,
-                   linewidths=0.8, edgecolors="#000000")
+        ax.scatter(x, y, s=sz, color=col, alpha=0.93, zorder=3,
+                   linewidths=1.2, edgecolors="#000000")
 
-    # Labels — offset slightly above node, font size scales with PR
+    # Labels — white, font size scales with PageRank
     for n, sz, pr_v in zip(nodes, node_sizes, node_pr_vals):
         x, y = pos[n]
-        t    = (pr_v - pr_min) / max(pr_max - pr_min, 1e-12)
-        fs   = 7 + 5 * t    # 7pt → 12pt
-        name = G.nodes[n].get("name", "")
-        ax.text(x, y + 0.07 * (sz / 1500) ** 0.4, name,
+        t  = (pr_v - pr_min) / max(pr_max - pr_min, 1e-12)
+        fs = 8 + 5 * t
+        ax.text(x, y + 0.075 * (sz / 2000) ** 0.35, G.nodes[n].get("name", ""),
                 ha="center", va="bottom", fontsize=fs,
-                color=TXT, fontweight="bold", zorder=5,
-                bbox=dict(boxstyle="round,pad=0.15", fc="#050505",
-                          ec="none", alpha=0.55))
+                color="#ffffff", fontweight="bold", zorder=4,
+                bbox=dict(boxstyle="round,pad=0.2", fc="#060810",
+                          ec="none", alpha=0.6))
 
-    # Legend — role colours removed; use gradient annotation instead
-    ax.annotate("Node colour & size = PageRank score\n"
-                "Edge brightness = hit-collaboration strength",
-                xy=(0.01, 0.01), xycoords="axes fraction",
-                fontsize=9, color=MUT,
-                bbox=dict(boxstyle="round,pad=0.4", fc="#111111", ec=BDR, alpha=0.8))
+    # ── Role legend (bottom left) ──────────────────────────────────────────────
+    legend_patches = [
+        mpatches.Patch(facecolor=ROLE_COLORS["director"], edgecolor="#000",
+                       linewidth=0.8, label="Director"),
+        mpatches.Patch(facecolor=ROLE_COLORS["writer"],   edgecolor="#000",
+                       linewidth=0.8, label="Writer"),
+        mpatches.Patch(facecolor=ROLE_COLORS["actor"],    edgecolor="#000",
+                       linewidth=0.8, label="Actor"),
+        mpatches.Patch(facecolor=ROLE_COLORS["actress"],  edgecolor="#000",
+                       linewidth=0.8, label="Actress"),
+    ]
+    legend = ax.legend(
+        handles=legend_patches, loc="lower left",
+        fontsize=12, framealpha=0.85,
+        facecolor="#111111", edgecolor="#333333",
+        title="Role", title_fontsize=12,
+    )
+    legend.get_title().set_color(TXT)
+    for text in legend.get_texts():
+        text.set_color(TXT)
 
-    ax.set_title("Hit-making collaboration network\n"
-                 "IMDB yellow = highest PageRank  ·  "
-                 f"Top {len(G.nodes)} connected filmmakers",
-                 fontsize=15, fontweight="bold", color=TXT, pad=18)
+    # Edge key (bottom right)
+    ax.annotate(
+        "Node size  ∝  PageRank score\n"
+        "Edge width & brightness  ∝  hit-collaboration strength",
+        xy=(0.99, 0.01), xycoords="axes fraction",
+        ha="right", va="bottom", fontsize=10, color="#aaaaaa",
+        bbox=dict(boxstyle="round,pad=0.5", fc="#111111", ec="#333333", alpha=0.85),
+    )
+
+    ax.set_title(
+        "Hit-making collaboration network  ·  "
+        f"Top {len(G.nodes)} connected filmmakers\n"
+        "Computed with Spark GraphFrames PageRank on IMDB collaboration graph",
+        fontsize=14, fontweight="bold", color=TXT, pad=20,
+    )
     ax.axis("off")
-    fig.tight_layout(pad=0.5)
+    fig.tight_layout(pad=1.0)
     _save(fig, "V3_network_subgraph.png")
 
 
