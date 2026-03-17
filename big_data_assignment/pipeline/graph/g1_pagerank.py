@@ -127,10 +127,12 @@ def _build_edges(principals: pd.DataFrame, train_labels: pd.DataFrame) -> pd.Dat
 
     edges = []
     for tconst, grp in prin_train.groupby("tconst"):
-        people  = grp["nconst"].unique().tolist()
+        people  = grp["nconst"].unique().tolist()   # unique() already deduplicates
         weight  = float(grp["label"].iloc[0])
         for i, a in enumerate(people):
             for b in people[i + 1:]:
+                if a == b:   # safety guard against self-loops
+                    continue
                 edges.append({"src": a, "dst": b, "weight": weight})
                 edges.append({"src": b, "dst": a, "weight": weight})  # undirected
 

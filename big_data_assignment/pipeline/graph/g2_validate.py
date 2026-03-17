@@ -212,22 +212,27 @@ def _fig_network(pr: pd.DataFrame, prin: pd.DataFrame, train: pd.DataFrame,
                    pr=row["pagerank"])
 
     for _, grp in prin_train.groupby("tconst"):
-        people = [n for n in grp["nconst"] if n in node_set]
+        # Deduplicate — a person can appear twice (e.g. actor + director credit)
+        people = list(dict.fromkeys(n for n in grp["nconst"] if n in node_set))
         w = float(grp["label"].iloc[0])
         for i, a in enumerate(people):
             for b in people[i + 1:]:
+                if a == b:          # safety guard against self-loops
+                    continue
                 if G.has_edge(a, b):
                     G[a][b]["weight"] += w
                 else:
                     G.add_edge(a, b, weight=w)
 
-    # Remove isolates
+    # Remove self-loops (belt-and-suspenders)
+    G.remove_edges_from(list(nx.selfloop_edges(G)))
+    # Remove isolates — nodes with no edges to other top-N people
     G.remove_nodes_from(list(nx.isolates(G)))
     if len(G.nodes) < 3:
         print("  [V3] Not enough connected top nodes — skipping network plot.")
         return
 
-    pos = nx.spring_layout(G, seed=42, k=2.5 / np.sqrt(len(G.nodes)))
+    pos = nx.spring_layout(G, seed=42, k=3.5 / np.sqrt(len(G.nodes)))
 
     node_colors  = [ROLE_COLOR.get(G.nodes[n].get("role", ""), MUT) for n in G.nodes]
     node_sizes   = [max(80, G.nodes[n].get("pr", 0) / pr["pagerank"].max() * 1200) for n in G.nodes]
