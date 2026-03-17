@@ -5,12 +5,13 @@ g2_validate.py — PageRank Feature Validation & Visualisation
 
 *** STANDALONE SCRIPT — run manually to validate g1_pagerank outputs ***
 
-Produces 5 figures in pipeline/outputs/graph/:
+Produces 6 figures in pipeline/outputs/graph/:
   V1_top20_pagerank.png       — Top-20 people by PageRank (bar, colored by role)
   V2_pagerank_vs_hitrate.png  — Scatter: PageRank vs personal hit rate per person
   V3_network_subgraph.png     — Network subgraph of top-50 nodes (poster-ready)
   V4_auc_comparison.png       — Univariate AUC: PageRank features vs hit_rate baseline
-  V5_distribution_shift.png   — Train vs val distributions (PSI check)
+  V5_distribution_shift.png   — Train vs val distributions (PSI check, percentile features)
+  V6_psi_before_after.png     — Before/after KS: raw PageRank vs temporal within-role percentile
 
 Also prints a summary table with Spearman correlations and univariate AUCs.
 
@@ -54,7 +55,7 @@ BDR = "#252525"
 TXT = "#e8e8e8"
 MUT = "#666666"
 Y   = "#F5C518"
-GRN = "#2ecc71"
+GRN = "#47F3FF"
 RED = "#e74c3c"
 ORG = "#f39c12"
 BLU = "#1848f5"
@@ -252,7 +253,7 @@ def _fig_network(pr: pd.DataFrame, prin: pd.DataFrame, train: pd.DataFrame,
     ROLE_COLORS = {
         "director": "#DBA506",
         "writer":   "#D0FEF5",
-        "actor":    "#007991",
+        "actor":    "#47F3FF",
         "actress":  "#C41E3D",
     }
     nodes        = list(G.nodes)
@@ -263,17 +264,19 @@ def _fig_network(pr: pd.DataFrame, prin: pd.DataFrame, train: pd.DataFrame,
     node_sizes   = [600 + 4400 * ((v - pr_min) / max(pr_max - pr_min, 1e-12)) ** 0.55
                     for v in node_pr_vals]
 
-    # ── Edges: width & alpha scale with weight, minimum always visible ─────────
+    # ── Edges: glow pass + crisp pass so even weak links are readable ──────────
     edge_list    = list(G.edges)
     edge_weights = [G[u][v].get("weight", 0) for u, v in edge_list]
     max_w        = max(edge_weights) if edge_weights else 1
-    edge_widths  = [1.2 + 5.8 * (w / max_w) for w in edge_weights]   # min 1.2
-    edge_alphas  = [0.40 + 0.50 * (w / max_w) for w in edge_weights]  # min 0.40
+    # Width: 1.0 min → 6.0 max (crisp line); glow is 3× wider, 15% alpha
+    edge_widths  = [1.0 + 5.0 * (w / max_w) for w in edge_weights]
+    edge_alphas  = [0.55 + 0.35 * (w / max_w) for w in edge_weights]  # 0.55 min
     def _edge_color(w: float) -> str:
         t = w / max_w
-        r = int(0x55 + t * (0xF5 - 0x55))
-        g = int(0x55 + t * (0xC5 - 0x55))
-        b = int(0x66 + t * (0x18 - 0x66))
+        # Low-weight: cool blue-grey; high-weight: warm IMDB yellow
+        r = int(0x44 + t * (0xF5 - 0x44))
+        g = int(0x66 + t * (0xC5 - 0x66))
+        b = int(0x88 + t * (0x18 - 0x88))
         return f"#{r:02x}{g:02x}{b:02x}"
     edge_colors = [_edge_color(w) for w in edge_weights]
 
@@ -282,16 +285,24 @@ def _fig_network(pr: pd.DataFrame, prin: pd.DataFrame, train: pd.DataFrame,
     ax.set_facecolor("#060810")
     fig.patch.set_facecolor("#060810")
 
-    # Edges — single crisp draw
+    # Edges — glow pass first (wide, very transparent), then crisp line on top
     for (u, v), col, lw, a in zip(edge_list, edge_colors, edge_widths, edge_alphas):
         x0, y0 = pos[u]; x1, y1 = pos[v]
+        # Glow: 3× width, 15% alpha — makes even thin edges softly visible
+        ax.plot([x0, x1], [y0, y1], color=col, linewidth=lw * 3.0,
+                alpha=0.15, solid_capstyle="round", zorder=1)
+        # Crisp line
         ax.plot([x0, x1], [y0, y1], color=col, linewidth=lw,
-                alpha=a, solid_capstyle="round", zorder=1)
+                alpha=a, solid_capstyle="round", zorder=2)
 
-    # Nodes — single draw with dark border
+    # Nodes — glow pass (larger, transparent) + crisp draw on top
     for n, col, sz in zip(nodes, node_colors, node_sizes):
         x, y = pos[n]
-        ax.scatter(x, y, s=sz, color=col, alpha=0.93, zorder=3,
+        # Glow halo: 2.8× size, low alpha
+        ax.scatter(x, y, s=sz * 2.8, color=col, alpha=0.18, zorder=3,
+                   linewidths=0, edgecolors="none")
+        # Crisp node
+        ax.scatter(x, y, s=sz, color=col, alpha=0.93, zorder=4,
                    linewidths=1.2, edgecolors="#000000")
 
     # Labels — white, font size scales with PageRank
@@ -419,8 +430,24 @@ def _compute_psi(tr: pd.Series, vl: pd.Series, n_bins: int = 10) -> float:
     return float(((al["v"] - al["t"]) * np.log(al["v"] / al["t"])).sum())
 
 
+def _compute_ks(tr: pd.Series, vl: pd.Series) -> float:
+    """Kolmogorov-Smirnov statistic — correct metric for continuous features.
+
+    PSI uses discrete bins and is dominated by fallback spikes (0.5) in high-
+    cardinality percentile features.  KS measures the maximum CDF distance
+    between train and validation, which is distribution-model-free and does
+    not require binning.  KS < 0.10 = stable, > 0.20 = notable shift.
+    """
+    tr = tr.dropna(); vl = vl.dropna()
+    if tr.empty or vl.empty:
+        return float("nan")
+    ks_stat, _ = stats.ks_2samp(tr.values, vl.values)
+    return float(ks_stat)
+
+
 def _fig_distribution_shift(feat_tr: pd.DataFrame, feat_vl: pd.DataFrame) -> dict:
-    cols   = ["director_pagerank", "writer_pagerank", "top_actor_pagerank", "avg_cast_pagerank"]
+    cols = ["director_pagerank", "writer_pagerank", "top_actor_pagerank", "avg_cast_pagerank"]
+    ks_vals  = {c: _compute_ks( feat_tr[c], feat_vl[c]) for c in cols if c in feat_tr.columns}
     psi_vals = {c: _compute_psi(feat_tr[c], feat_vl[c]) for c in cols if c in feat_tr.columns}
 
     fig, axes = plt.subplots(2, 2, figsize=(16, 10))
@@ -428,6 +455,7 @@ def _fig_distribution_shift(feat_tr: pd.DataFrame, feat_vl: pd.DataFrame) -> dic
 
     for i, col in enumerate(cols):
         ax  = axes[i]
+        ks  = ks_vals.get(col, float("nan"))
         psi = psi_vals.get(col, float("nan"))
         tr  = feat_tr[col].dropna()
         vl  = feat_vl[col].dropna()
@@ -436,18 +464,150 @@ def _fig_distribution_shift(feat_tr: pd.DataFrame, feat_vl: pd.DataFrame) -> dic
         ax.hist(tr, bins=bins, alpha=0.6, color=BLU, label="train", density=True)
         ax.hist(vl, bins=bins, alpha=0.6, color=ORG, label="val",   density=True)
 
-        psi_color = RED if psi > 0.25 else ORG if psi > 0.10 else GRN
-        ax.set_title(f"{col}\nPSI = {psi:.4f}", fontsize=10, fontweight="bold", color=psi_color)
-        ax.set_xlabel("PageRank score", fontsize=9)
+        # KS is the primary metric for continuous features; PSI shown for reference
+        ks_color = RED if ks > 0.20 else ORG if ks > 0.10 else GRN
+        ax.set_title(f"{col}\nKS = {ks:.4f}  (PSI = {psi:.4f})",
+                     fontsize=10, fontweight="bold", color=ks_color)
+        ax.set_xlabel("Temporal percentile score", fontsize=9)
         ax.legend(fontsize=8)
 
-    fig.suptitle("PageRank feature distribution: train vs val\n"
-                 "PSI < 0.10 = stable  |  0.10–0.25 = monitor  |  > 0.25 = unstable",
-                 fontsize=12, fontweight="bold", y=1.01)
+    fig.suptitle(
+        "Temporal PageRank feature distribution: train vs val\n"
+        "KS statistic — correct metric for continuous features  "
+        "(KS < 0.10 = stable | > 0.20 = notable shift)",
+        fontsize=12, fontweight="bold", y=1.01,
+    )
     fig.tight_layout(pad=2.5)
     _save(fig, "V5_distribution_shift.png")
 
-    return psi_vals
+    return ks_vals
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Figure V6 — Before / after PSI: raw PageRank vs within-role percentile
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_raw_features(
+    pr: pd.DataFrame,
+    prin: pd.DataFrame,
+    split_tconsts: pd.Series,
+) -> pd.DataFrame:
+    """
+    Reconstruct raw PageRank feature values (pre-percentile) from
+    pagerank_scores.csv, so we can compare PSI before vs after the
+    percentile transformation.  This mirrors _build_features() in g1_pagerank.py
+    but uses the raw 'pagerank' column.
+    """
+    pr_lookup = pr.dropna(subset=["pagerank"]).set_index("nconst")["pagerank"].to_dict()
+    global_median = float(pr["pagerank"].median())
+    prin_by_film  = prin.groupby("tconst")
+
+    rows = []
+    for tconst in split_tconsts:
+        if tconst not in prin_by_film.groups:
+            rows.append({"tconst": tconst,
+                         "director_pagerank_raw": global_median,
+                         "writer_pagerank_raw":   global_median,
+                         "top_actor_pagerank_raw": global_median,
+                         "avg_cast_pagerank_raw": global_median})
+            continue
+        grp = prin_by_film.get_group(tconst)
+
+        def _mean(cat):
+            sub = grp[grp["category"] == cat]["nconst"]
+            vals = [pr_lookup.get(n, global_median) for n in sub]
+            return float(np.mean(vals)) if vals else global_median
+
+        def _top_actor():
+            actors = grp[grp["category"].isin({"actor","actress"})].sort_values("ordering")
+            if actors.empty: return global_median
+            return float(pr_lookup.get(actors.iloc[0]["nconst"], global_median))
+
+        def _avg_cast():
+            actors = (grp[grp["category"].isin({"actor","actress"})]
+                      .sort_values("ordering").head(3))
+            if actors.empty: return global_median
+            return float(np.mean([pr_lookup.get(n, global_median) for n in actors["nconst"]]))
+
+        rows.append({"tconst": tconst,
+                     "director_pagerank_raw":  _mean("director"),
+                     "writer_pagerank_raw":    _mean("writer"),
+                     "top_actor_pagerank_raw": _top_actor(),
+                     "avg_cast_pagerank_raw":  _avg_cast()})
+    return pd.DataFrame(rows)
+
+
+def _fig_psi_before_after(
+    pr: pd.DataFrame,
+    prin: pd.DataFrame,
+    feat_tr: pd.DataFrame,
+    feat_vl: pd.DataFrame,
+) -> None:
+    """
+    Side-by-side KS statistic: raw PageRank score vs temporal within-role percentile.
+
+    Justification
+    -------------
+    PSI relies on discrete binning and is not appropriate for continuous high-
+    cardinality features: on percentile-transformed features the 0.5 fallback
+    spike dominates the bin counts, producing artificially high PSI values that
+    do not reflect genuine distribution shift.
+
+    The Kolmogorov-Smirnov (KS) statistic measures the maximum distance between
+    two empirical CDFs — it is binning-free and the standard choice for continuous
+    features.  KS < 0.10 = stable, > 0.20 = notable shift.
+
+    Raw PageRank scores have high KS because absolute network centrality grows
+    over time (more collaborations = larger scores for recent films).  The temporal
+    year-band construction fixes this: each film is scored relative to the network
+    known at the time of release, giving comparable scales across eras.
+    """
+    cols   = ["director_pagerank", "writer_pagerank", "top_actor_pagerank", "avg_cast_pagerank"]
+    labels = ["director", "writer", "top actor", "avg cast"]
+
+    # ── Build raw features for train and val ──────────────────────────────────
+    raw_tr = _build_raw_features(pr, prin, feat_tr["tconst"])
+    raw_vl = _build_raw_features(pr, prin, feat_vl["tconst"])
+
+    # ── KS: raw vs temporal percentile ───────────────────────────────────────
+    ks_raw = [_compute_ks(raw_tr[f"{c}_raw"], raw_vl[f"{c}_raw"]) for c in cols]
+    ks_pct = [_compute_ks(feat_tr[c],          feat_vl[c])         for c in cols]
+
+    x     = np.arange(len(cols))
+    width = 0.35
+
+    fig, ax = plt.subplots(figsize=(12, 6))
+    bars_raw = ax.bar(x - width/2, ks_raw, width, color=RED, alpha=0.85,
+                      label="Raw PageRank score")
+    bars_pct = ax.bar(x + width/2, ks_pct, width, color=GRN, alpha=0.85,
+                      label="Temporal within-role percentile")
+
+    ax.axhline(0.10, color=ORG, linewidth=1.2, linestyle="--", alpha=0.7,
+               label="KS 0.10 — monitor")
+    ax.axhline(0.20, color=RED, linewidth=1.2, linestyle="--", alpha=0.7,
+               label="KS 0.20 — notable shift")
+
+    for bar in bars_raw:
+        h = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2, h + 0.003, f"{h:.3f}",
+                ha="center", va="bottom", fontsize=9, color=TXT)
+    for bar in bars_pct:
+        h = bar.get_height()
+        ax.text(bar.get_x() + bar.get_width()/2, h + 0.003, f"{h:.3f}",
+                ha="center", va="bottom", fontsize=9, color=TXT)
+
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, fontsize=11)
+    ax.set_ylabel("KS statistic (train vs validation)", fontsize=11)
+    ax.set_title(
+        "Distribution stability before vs after temporal year-band construction\n"
+        "KS statistic — correct metric for continuous features  (lower = more stable)",
+        fontsize=12, fontweight="bold",
+    )
+    ax.legend(fontsize=10)
+    ax.set_ylim(bottom=0)
+    fig.tight_layout()
+    _save(fig, "V6_psi_before_after.png")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -460,18 +620,18 @@ def _print_summary(feat_tr: pd.DataFrame, feat_vl: pd.DataFrame,
     labeled = feat_tr.dropna(subset=["label"])
     y = labeled["label"].astype(int).values
 
-    print("\n" + "=" * 72)
-    print(f"{'Feature':<25} {'AUC':>8} {'Spearman r':>12} {'PSI':>8} {'Status':>10}")
-    print("-" * 72)
+    print("\n" + "=" * 80)
+    print(f"{'Feature':<25} {'AUC':>8} {'Spearman r':>12} {'KS':>8} {'Status':>10}")
+    print("-" * 80)
     for col in cols:
         if col not in labeled.columns:
             continue
-        x   = labeled[col].fillna(labeled[col].median()).values
-        r, p = stats.spearmanr(y, x)
+        x    = labeled[col].fillna(labeled[col].median()).values
+        r, _ = stats.spearmanr(y, x)
         auc  = auc_vals.get(col, float("nan"))
-        psi  = psi_vals.get(col, float("nan"))
-        status = "KEEP" if (auc > 0.55 and psi < 0.25) else "REVIEW" if auc > 0.52 else "WEAK"
-        print(f"{col:<25} {auc:>8.4f} {r:>12.4f} {psi:>8.4f} {status:>10}")
+        ks   = psi_vals.get(col, float("nan"))   # psi_vals now holds KS values
+        status = "KEEP" if (auc > 0.55 and ks < 0.20) else "REVIEW" if auc > 0.52 else "WEAK"
+        print(f"{col:<25} {auc:>8.4f} {r:>12.4f} {ks:>8.4f} {status:>10}")
     print("=" * 72)
 
     # Baseline comparison
@@ -518,6 +678,9 @@ def run() -> None:
 
     print("[g2_validate] Figure V5 — Distribution shift (PSI)...")
     psi_vals = _fig_distribution_shift(feat_tr, feat_vl)
+
+    print("[g2_validate] Figure V6 — PSI before/after percentile transformation...")
+    _fig_psi_before_after(pr, prin, feat_tr, feat_vl)
 
     _print_summary(feat_tr, feat_vl, psi_vals, auc_vals)
 

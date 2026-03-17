@@ -93,10 +93,13 @@ SEED = _CFG.get("global", {}).get("seed", 42)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def _load_splits() -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Return (train_df, val_df, test_df) with tconst + label columns."""
-    train = pd.read_parquet(PROC / "train_clean.parquet")[["tconst", "label"]]
-    val   = pd.read_parquet(PROC / "validation_hidden_clean.parquet")[["tconst"]]
-    test  = pd.read_parquet(PROC / "test_hidden_clean.parquet")[["tconst"]]
+    """Return (train_df, val_df, test_df) with tconst + label + startYear."""
+    train = pd.read_parquet(PROC / "train_clean.parquet")[["tconst", "label", "startYear"]]
+    val   = pd.read_parquet(PROC / "validation_hidden_clean.parquet")[["tconst", "startYear"]]
+    test  = pd.read_parquet(PROC / "test_hidden_clean.parquet")[["tconst", "startYear"]]
+    # Coerce startYear to int, fill missing with 0 (will get fallback)
+    for df in (train, val, test):
+        df["startYear"] = pd.to_numeric(df["startYear"], errors="coerce").fillna(0).astype(int)
     return train, val, test
 
 
@@ -252,43 +255,106 @@ def _compute_pagerank(
 # Feature assembly
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _compute_role_percentiles(
+    pr: pd.DataFrame,
+    principals: pd.DataFrame,
+) -> dict[str, dict[str, float]]:
+    """
+    Compute within-role percentile rank (0–1) for every person's PageRank.
+
+    Why percentile instead of raw score
+    ------------------------------------
+    Raw PageRank is confounded by two things:
+      1. Genre network density — studio-system genres (action, blockbuster)
+         have denser co-credit networks, so everyone in those genres scores
+         higher regardless of quality.
+      2. Distribution shift — the absolute PageRank scale shifts between
+         the training and validation splits (PSI > 0.25 on raw features),
+         hurting generalisation.
+
+    A within-role percentile answers "how central is this person relative
+    to their peers?" rather than giving an absolute network score.
+    This makes the feature:
+      • Stable across splits (percentiles are always 0–1)
+      • Genre-neutral (a drama director at p90 is comparable to an action
+        director at p90)
+      • Robust to graph size changes (new people enter at p50 fallback)
+
+    Pooling
+    -------
+    actor and actress share one percentile pool — they compete for the
+    same roles and their network positions are directly comparable.
+
+    Returns: {role: {nconst: percentile_rank (0–1)}}
+    """
+    role_pct: dict[str, dict[str, float]] = {}
+
+    for role in ("director", "writer"):
+        nconsts = set(principals[principals["category"] == role]["nconst"].unique())
+        sub = pr[pr["nconst"].isin(nconsts)].copy()
+        if sub.empty:
+            role_pct[role] = {}
+        else:
+            sub["pct"] = sub["pagerank"].rank(pct=True)
+            role_pct[role] = sub.set_index("nconst")["pct"].to_dict()
+
+    # actors + actresses share one pool
+    act_nconsts = set(
+        principals[principals["category"].isin({"actor", "actress"})]["nconst"].unique()
+    )
+    sub = pr[pr["nconst"].isin(act_nconsts)].copy()
+    if sub.empty:
+        act_pct: dict[str, float] = {}
+    else:
+        sub["pct"] = sub["pagerank"].rank(pct=True)
+        act_pct = sub.set_index("nconst")["pct"].to_dict()
+    role_pct["actor"]   = act_pct
+    role_pct["actress"] = act_pct
+
+    return role_pct
+
+
 def _build_features(
     split_df: pd.DataFrame,
     principals: pd.DataFrame,
     pr: pd.DataFrame,
+    role_pct: dict[str, dict[str, float]],
 ) -> pd.DataFrame:
     """
     For each film in split_df, compute:
-      director_pagerank   — mean PageRank of directors
-      writer_pagerank     — mean PageRank of writers
-      top_actor_pagerank  — PageRank of ordering=1 actor/actress
-      avg_cast_pagerank   — mean PageRank of top-3 actors/actresses
+      director_pagerank   — mean within-director percentile of director(s)
+      writer_pagerank     — mean within-writer percentile of writer(s)
+      top_actor_pagerank  — within-actor percentile of ordering=1 actor/actress
+      avg_cast_pagerank   — mean within-actor percentile of top-3 actors/actresses
+
+    Values are percentile ranks (0–1), not raw PageRank scores.
+    Fallback = 0.5 (median percentile) for crew absent from the training graph.
     """
-    global_median = float(pr["pagerank"].median())
+    FALLBACK = 0.5  # median percentile — neutral for debut / unknown crew
 
-    pr_lookup = pr.set_index("nconst")["pagerank"].to_dict()
+    def _mean_pct(group: pd.DataFrame, cat: str) -> float:
+        sub  = group[group["category"] == cat]
+        pool = role_pct.get(cat, {})
+        vals = [pool.get(n, FALLBACK) for n in sub["nconst"]]
+        return float(np.mean(vals)) if vals else FALLBACK
 
-    def _mean_pr(group: pd.DataFrame, cat: str | list) -> float:
-        cats = [cat] if isinstance(cat, str) else cat
-        sub  = group[group["category"].isin(cats)]
-        vals = [pr_lookup.get(n, global_median) for n in sub["nconst"]]
-        return float(np.mean(vals)) if vals else global_median
-
-    def _top_actor_pr(group: pd.DataFrame) -> float:
+    def _top_actor_pct(group: pd.DataFrame) -> float:
         actors = group[group["category"].isin({"actor", "actress"})].sort_values("ordering")
         if actors.empty:
-            return global_median
-        return float(pr_lookup.get(actors.iloc[0]["nconst"], global_median))
+            return FALLBACK
+        pool = role_pct.get("actor", {})
+        return float(pool.get(actors.iloc[0]["nconst"], FALLBACK))
 
-    def _avg_cast_pr(group: pd.DataFrame, top_n: int = 3) -> float:
+    def _avg_cast_pct(group: pd.DataFrame, top_n: int = 3) -> float:
         actors = (
             group[group["category"].isin({"actor", "actress"})]
             .sort_values("ordering")
             .head(top_n)
         )
         if actors.empty:
-            return global_median
-        vals = [pr_lookup.get(n, global_median) for n in actors["nconst"]]
+            return FALLBACK
+        pool = role_pct.get("actor", {})
+        vals = [pool.get(n, FALLBACK) for n in actors["nconst"]]
         return float(np.mean(vals))
 
     rows = []
@@ -298,21 +364,134 @@ def _build_features(
         if tconst not in prin_by_film.groups:
             rows.append({
                 "tconst":             tconst,
-                "director_pagerank":  global_median,
-                "writer_pagerank":    global_median,
-                "top_actor_pagerank": global_median,
-                "avg_cast_pagerank":  global_median,
+                "director_pagerank":  FALLBACK,
+                "writer_pagerank":    FALLBACK,
+                "top_actor_pagerank": FALLBACK,
+                "avg_cast_pagerank":  FALLBACK,
             })
             continue
         grp = prin_by_film.get_group(tconst)
         rows.append({
             "tconst":             tconst,
-            "director_pagerank":  _mean_pr(grp, "director"),
-            "writer_pagerank":    _mean_pr(grp, "writer"),
-            "top_actor_pagerank": _top_actor_pr(grp),
-            "avg_cast_pagerank":  _avg_cast_pr(grp),
+            "director_pagerank":  _mean_pct(grp, "director"),
+            "writer_pagerank":    _mean_pct(grp, "writer"),
+            "top_actor_pagerank": _top_actor_pct(grp),
+            "avg_cast_pagerank":  _avg_cast_pct(grp),
         })
 
+    return pd.DataFrame(rows)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Temporal feature assembly
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _build_temporal_features(
+    split_df: pd.DataFrame,
+    principals: pd.DataFrame,
+    train_df: pd.DataFrame,
+    cutoffs: list[int],
+    reset_prob: float,
+    tol: float,
+    max_iter: int,
+    spark_cores: int,
+    force_networkx: bool,
+) -> pd.DataFrame:
+    """
+    Build PageRank features without temporal leakage.
+
+    Why this fixes the original problem
+    ------------------------------------
+    The original graph used ALL training films to compute PageRank, then
+    assigned those scores to every film regardless of release year. This means
+    a 1992 film got a PageRank score that included collaborations from 1995,
+    2000, and 2010 — future information. The score was therefore almost
+    identical to the lifetime hit_rate, making it collinear and adding no
+    independent signal.
+
+    The fix: for films released in year Y, build the graph using only
+    training films released BEFORE year Y. This produces a genuine leading
+    indicator — "how central was this person in the network at the time this
+    film was made?"
+
+    Why this should fix the PSI shift
+    ----------------------------------
+    The original PSI shift occurred because val films have a different
+    temporal distribution than train films. With temporal graphs, a 2012
+    train film and a 2012 val film both get scores from the same pre-2010
+    graph — their feature distributions are structurally aligned.
+
+    Implementation: year-band graphs
+    ---------------------------------
+    We build one graph per cutoff year (O(n_cutoffs) PageRank computations).
+    Films in year band [cutoff_i, cutoff_{i+1}) get scores from the graph
+    built at cutoff_i. This is a practical approximation — the alternative
+    (one graph per unique year) would require ~100 PageRank runs.
+
+    Films released before the first cutoff, or with no year data, get the
+    global fallback of 0.5 (median percentile — neutral, not penalised).
+    """
+    PR_COLS  = ["director_pagerank", "writer_pagerank",
+                "top_actor_pagerank", "avg_cast_pagerank"]
+    FALLBACK = 0.5
+    cutoffs  = sorted(cutoffs)
+
+    # Attach year to principals (for filtering edges by year)
+    year_map   = train_df[["tconst", "startYear"]].copy()
+    prin_yr    = principals.merge(year_map, on="tconst", how="left")
+    prin_yr["startYear"] = prin_yr["startYear"].fillna(0).astype(int)
+
+    # Result store: tconst → feature dict
+    feat_store: dict[str, dict] = {}
+
+    for band_idx, cutoff in enumerate(cutoffs):
+        # Films in this band: startYear in [cutoff, next_cutoff)
+        next_cutoff = cutoffs[band_idx + 1] if band_idx + 1 < len(cutoffs) else 9999
+        band_mask = (
+            (split_df["startYear"] >= cutoff) &
+            (split_df["startYear"] <  next_cutoff)
+        )
+        band_tconsts = split_df.loc[band_mask, "tconst"].tolist()
+        if not band_tconsts:
+            continue
+
+        # Training films released STRICTLY BEFORE this cutoff
+        train_before = train_df[train_df["startYear"] < cutoff][["tconst", "label"]]
+        if len(train_before) < 50:
+            # Too few films to build a meaningful graph — use fallback
+            print(f"[g1_pagerank] Cutoff {cutoff}: only {len(train_before)} train films — using fallback")
+            for tc in band_tconsts:
+                feat_store[tc] = {c: FALLBACK for c in PR_COLS}
+            continue
+
+        print(f"[g1_pagerank] Cutoff {cutoff} (band {cutoff}–{next_cutoff}): "
+              f"{len(train_before)} train films, {len(band_tconsts)} scored films")
+
+        # Build edges from pre-cutoff training films only
+        edges_df = _build_edges(principals, train_before)
+        vertices = principals["nconst"].unique().tolist()
+
+        pr = _compute_pagerank(
+            edges_df, vertices, reset_prob, tol, max_iter, spark_cores, force_networkx
+        )
+        role_pct = _compute_role_percentiles(pr, principals)
+
+        # Score band films
+        band_df  = pd.DataFrame({"tconst": band_tconsts})
+        feat_df  = _build_features(band_df, principals, pr, role_pct)
+
+        for _, row in feat_df.iterrows():
+            feat_store[row["tconst"]] = {c: row[c] for c in PR_COLS}
+
+    # Assemble final DataFrame — any film not scored gets fallback
+    n_fallback = sum(1 for tc in split_df["tconst"] if tc not in feat_store)
+    if n_fallback:
+        print(f"[g1_pagerank] {n_fallback} films before first cutoff → fallback=0.5")
+
+    rows = []
+    for tconst in split_df["tconst"]:
+        row = feat_store.get(tconst, {c: FALLBACK for c in PR_COLS})
+        rows.append({"tconst": tconst, **row})
     return pd.DataFrame(rows)
 
 
@@ -326,10 +505,20 @@ def run(
     max_iter: int = 20,
     spark_cores: int = 4,
     force_networkx: bool = False,
+    temporal_cutoffs: list[int] | None = None,
 ) -> pd.DataFrame:
     print("=" * 60)
     print("Graph Pipeline — g1: Collaboration Network PageRank")
     print("=" * 60)
+
+    _gr = _CFG.get("graph", {}).get("pagerank", {})
+    if temporal_cutoffs is None:
+        temporal_cutoffs = _gr.get(
+            "temporal_cutoffs",
+            [1970, 1980, 1990, 1995, 2000, 2005, 2010, 2015, 2020],
+        )
+
+    print(f"[g1_pagerank] Temporal cutoffs: {temporal_cutoffs}")
 
     # ── 1. Load data ──────────────────────────────────────────────────────────
     print("[g1_pagerank] Loading splits and principals...")
@@ -342,42 +531,73 @@ def run(
     print(f"[g1_pagerank] Principals: {len(principals)} rows, "
           f"{principals['nconst'].nunique():,} unique people")
 
-    # ── 2. Build edges (train labels only) ───────────────────────────────────
-    print("[g1_pagerank] Building collaboration edges...")
-    edges_df = _build_edges(principals, train_df)
-    vertices = principals["nconst"].unique().tolist()
-    print(f"[g1_pagerank] Graph: {len(vertices):,} vertices, {len(edges_df):,} directed edges")
+    # ── 2. Build temporal features for each split ─────────────────────────────
+    # The temporal approach computes a separate PageRank graph per year-band,
+    # using only training films released BEFORE each cutoff year.
+    # This eliminates temporal leakage and should fix the PSI shift between
+    # train and val splits.
+    #
+    # A global lifetime graph is also computed once and saved to
+    # pagerank_scores.csv for visualisation/validation purposes (V1–V3).
+    print("[g1_pagerank] Building global lifetime graph for visualisation...")
+    edges_global = _build_edges(principals, train_df[["tconst", "label"]])
+    vertices     = principals["nconst"].unique().tolist()
+    print(f"[g1_pagerank] Global graph: {len(vertices):,} vertices, "
+          f"{len(edges_global):,} directed edges")
 
-    # ── 3. PageRank ───────────────────────────────────────────────────────────
-    pr = _compute_pagerank(
-        edges_df, vertices, reset_prob, tol, max_iter, spark_cores, force_networkx
+    pr_global  = _compute_pagerank(
+        edges_global, vertices, reset_prob, tol, max_iter, spark_cores, force_networkx
     )
+    role_pct_global = _compute_role_percentiles(pr_global, principals)
 
-    # ── 4. Attach names and save scores ──────────────────────────────────────
-    pr_named = pr.merge(names, on="nconst", how="left")
+    # Save global scores for g2_validate.py visualisations
+    pr_named = pr_global.merge(names, on="nconst", how="left")
     pr_named = pr_named.merge(
         principals[["nconst", "category"]].drop_duplicates("nconst"),
         on="nconst", how="left",
+    )
+    pr_named["pagerank_pct"] = pr_named.apply(
+        lambda row: role_pct_global.get(str(row["category"]), {}).get(row["nconst"], 0.5),
+        axis=1,
     )
     pr_named = pr_named.sort_values("pagerank", ascending=False).reset_index(drop=True)
     pr_named.to_csv(OUT_GRAPH / "pagerank_scores.csv", index=False)
     print(f"[g1_pagerank] Saved pagerank_scores.csv ({len(pr_named)} rows)")
 
-    # Top 10 for quick sanity check
-    print("\nTop 10 by PageRank:")
-    print(pr_named[["primaryName", "category", "pagerank"]].head(10).to_string(index=False))
+    print("\nTop 10 by PageRank (global lifetime graph):")
+    print(
+        pr_named[["primaryName", "category", "pagerank", "pagerank_pct"]]
+        .head(10).to_string(index=False)
+    )
     print()
 
-    # ── 5. Build features for each split ─────────────────────────────────────
+    # ── 3. Build TEMPORAL features for each split ─────────────────────────────
+    print("[g1_pagerank] Building temporal features (year-band graphs)...")
     for split_name, split_df in [("train", train_df), ("val", val_df), ("test", test_df)]:
-        print(f"[g1_pagerank] Building features for {split_name}...")
-        feat_df = _build_features(split_df, principals, pr)
+        print(f"\n[g1_pagerank] ── {split_name.upper()} ──")
+        feat_df = _build_temporal_features(
+            split_df=split_df,
+            principals=principals,
+            train_df=train_df[["tconst", "label", "startYear"]],
+            cutoffs=temporal_cutoffs,
+            reset_prob=reset_prob,
+            tol=tol,
+            max_iter=max_iter,
+            spark_cores=spark_cores,
+            force_networkx=force_networkx,
+        )
         out_name = f"features_pagerank{'_' + split_name if split_name != 'train' else ''}"
         feat_df.to_parquet(OUT_GRAPH / f"{out_name}.parquet", index=False)
         feat_df.to_csv(OUT_GRAPH / f"{out_name}.csv", index=False)
         print(f"[g1_pagerank] Saved {out_name}.parquet ({len(feat_df)} rows)")
+        if split_name == "train":
+            print("  Feature ranges (all should be 0–1):")
+            for col in ["director_pagerank", "writer_pagerank",
+                        "top_actor_pagerank", "avg_cast_pagerank"]:
+                print(f"    {col}: [{feat_df[col].min():.3f}, {feat_df[col].max():.3f}]"
+                      f"  mean={feat_df[col].mean():.3f}")
 
-    print("=" * 60)
+    print("\n" + "=" * 60)
     print("Graph Pipeline — Complete")
     print(f"Outputs in: {OUT_GRAPH}")
     print("=" * 60)

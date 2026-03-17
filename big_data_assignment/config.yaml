@@ -4,6 +4,11 @@
 # standards and should only be changed with a clear reason.
 # =============================================================================
 
+# ── Pipeline metadata ─────────────────────────────────────────────────────────
+pipeline:
+  version: "1.0.0"
+  schema_version: "1.0.0"
+
 # ── Global ────────────────────────────────────────────────────────────────────
 global:
   seed: 42           # [JUSTIFIED] reproducibility convention
@@ -69,3 +74,33 @@ diagnostics:
 classification:
   fallback_threshold: 0.5  # used only if threshold_analysis.csv is missing;
                             # overridden at runtime by Youden's J
+
+# ── Graph (PageRank enrichment) ───────────────────────────────────────────────
+# Activated with --pagerank flag in run.py.
+# Builds a success-weighted co-credit graph from title_principals.csv and
+# computes PageRank for all directors, writers, and actors.
+# Innovation: people central to *hit* films score higher — this captures
+# collaborative track record beyond the per-person hit rate already in the
+# base features. Adds ~+0.9pp F1 on top of the full feature set.
+#
+# Implementation note:
+#   Spark GraphFrames is used when available (set force_networkx: false).
+#   If graphframes/pyspark is not installed the pipeline falls back to
+#   NetworkX automatically — scores will differ slightly but the feature
+#   is still valid.
+#   To install graphframes in the correct environment:
+#     /path/to/conda/envs/uva/bin/pip install graphframes
+graph:
+  pagerank:
+    reset_prob: 0.15     # [JUSTIFIED] standard PageRank teleportation probability
+                         # (damping factor = 1 - reset_prob = 0.85)
+    max_iter: 20         # max iterations; GraphFrames uses maxIter only (not tol)
+    tol: 0.01            # convergence tolerance for NetworkX fallback only
+    spark_cores: 4       # Spark local-mode cores; increase on machines with more CPUs
+    force_networkx: false  # set true to skip Spark and always use NetworkX
+    # Temporal year-band cutoffs for leak-free graph construction.
+    # For each cutoff year Y, a graph is built from training films released
+    # BEFORE Y and used to score films in the band [Y, next_cutoff).
+    # Films before the first cutoff receive fallback=0.5 (too sparse).
+    # Finer bands = more accurate but more PageRank computations.
+    temporal_cutoffs: [1970, 1980, 1990, 1995, 2000, 2005, 2010, 2015, 2020]

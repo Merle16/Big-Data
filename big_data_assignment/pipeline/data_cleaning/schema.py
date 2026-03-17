@@ -7,7 +7,28 @@ validate UUID formats and key uniqueness at runtime.
 Every pipeline step reads from here instead of auto-detecting.
 """
 
+import logging
+import re
+
 import duckdb
+import pandas as pd
+
+log = logging.getLogger("pipeline.schema")
+
+# ── Schema version ────────────────────────────────────────────────────────────
+SCHEMA_VERSION = "1.0.0"
+
+# ── Data contracts ────────────────────────────────────────────────────────────
+# Maps column names to type/null/range rules used by validate_contracts().
+COLUMN_CONTRACTS: dict[str, dict] = {
+    "tconst":         {"type": str,   "nullable": False, "pattern": r"^tt\d+$"},
+    "startYear":      {"type": float, "nullable": True,  "min": 1880, "max": 2030},
+    "runtimeMinutes": {"type": float, "nullable": True,  "min": 1,    "max": 600},
+    "numVotes":       {"type": float, "nullable": True,  "min": 0},
+    "averageRating":  {"type": float, "nullable": True,  "min": 0.0,  "max": 10.0},
+    "label":          {"type": int,   "nullable": False, "values": [0, 1]},
+    "isAdult":        {"type": int,   "nullable": True,  "values": [0, 1]},
+}
 
 # ── SCHEMA ────────────────────────────────────────────────────────────────────
 #
@@ -148,3 +169,113 @@ def validate(con: duckdb.DuckDBPyConnection, table: str) -> list[str]:
             errors.append(f"{table}: {dupes} duplicate key groups on ({', '.join(key)})")
 
     return errors
+
+
+# ── DataFrame contract validation ─────────────────────────────────────────────
+
+def validate_contracts(df: pd.DataFrame, split: str = "unknown") -> list[str]:
+    """Validate a DataFrame against COLUMN_CONTRACTS.
+
+    Checks each column declared in COLUMN_CONTRACTS that exists in *df*:
+      - nullable: non-nullable columns must have zero nulls
+      - type: numeric contracts require the column to hold numeric data
+      - min/max: values must fall within declared range (NaN excluded)
+      - values: values must be members of the allowed set (NaN excluded)
+      - pattern: string columns must match the regex (non-null values only)
+
+    Returns a list of warning strings (does NOT raise). Each warning is also
+    emitted via the module logger at WARNING level.
+    """
+    warnings: list[str] = []
+
+    for col, contract in COLUMN_CONTRACTS.items():
+        if col not in df.columns:
+            continue
+
+        series = df[col]
+
+        # ── nullable check ────────────────────────────────────────────────────
+        null_count = int(series.isna().sum())
+        if not contract.get("nullable", True) and null_count > 0:
+            msg = (
+                f"[{split}] contract violation — '{col}': "
+                f"{null_count} null values but column is not nullable"
+            )
+            warnings.append(msg)
+            log.warning(msg)
+
+        # ── numeric type check ────────────────────────────────────────────────
+        expected_type = contract.get("type")
+        if expected_type in (int, float):
+            try:
+                pd.to_numeric(series.dropna(), errors="raise")
+            except (ValueError, TypeError):
+                msg = (
+                    f"[{split}] contract violation — '{col}': "
+                    f"expected numeric type {expected_type.__name__}, "
+                    f"found dtype {series.dtype}"
+                )
+                warnings.append(msg)
+                log.warning(msg)
+
+        non_null = series.dropna()
+
+        # ── allowed values check ──────────────────────────────────────────────
+        if "values" in contract and len(non_null) > 0:
+            allowed = set(contract["values"])
+            try:
+                bad_mask = ~non_null.isin(allowed)
+                bad_count = int(bad_mask.sum())
+            except TypeError:
+                bad_count = 0
+            if bad_count > 0:
+                msg = (
+                    f"[{split}] contract violation — '{col}': "
+                    f"{bad_count} values not in allowed set {contract['values']}"
+                )
+                warnings.append(msg)
+                log.warning(msg)
+
+        # ── range checks ──────────────────────────────────────────────────────
+        if ("min" in contract or "max" in contract) and len(non_null) > 0:
+            try:
+                numeric_vals = pd.to_numeric(non_null, errors="coerce").dropna()
+                if "min" in contract:
+                    below = int((numeric_vals < contract["min"]).sum())
+                    if below > 0:
+                        msg = (
+                            f"[{split}] contract violation — '{col}': "
+                            f"{below} values below minimum {contract['min']}"
+                        )
+                        warnings.append(msg)
+                        log.warning(msg)
+                if "max" in contract:
+                    above = int((numeric_vals > contract["max"]).sum())
+                    if above > 0:
+                        msg = (
+                            f"[{split}] contract violation — '{col}': "
+                            f"{above} values above maximum {contract['max']}"
+                        )
+                        warnings.append(msg)
+                        log.warning(msg)
+            except (TypeError, ValueError):
+                pass
+
+        # ── regex pattern check ───────────────────────────────────────────────
+        if "pattern" in contract and len(non_null) > 0:
+            pattern = contract["pattern"]
+            try:
+                bad_count = int(
+                    (~non_null.astype(str).str.match(pattern, na=False)).sum()
+                )
+                if bad_count > 0:
+                    msg = (
+                        f"[{split}] contract violation — '{col}': "
+                        f"{bad_count} values do not match pattern '{pattern}'"
+                    )
+                    warnings.append(msg)
+                    log.warning(msg)
+            except (TypeError, re.error):
+                pass
+
+    return warnings

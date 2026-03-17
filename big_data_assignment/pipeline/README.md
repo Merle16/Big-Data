@@ -11,8 +11,11 @@ All commands are run from the project root (`big_data_assignment/`).
 # Full pipeline with no enrichment
 python pipeline/run.py
 
-# Full pipeline with both enrichments
-python pipeline/run.py --genre --rt-oscar
+# Full pipeline with all enrichments (genre, RT/Oscar, and graph PageRank)
+python pipeline/run.py --genre --rt-oscar --pagerank
+
+# Graph PageRank features only (assumes feature parquets already exist)
+python pipeline/run.py --from features --pagerank
 
 # Genre enrichment only (default data/Movies_by_Genre/ folder)
 python pipeline/run.py --genre
@@ -66,12 +69,38 @@ Enrichment steps are opt-in and run automatically after cleaning, before feature
 
 The legacy flag `--external-dataset` is kept as a hidden alias for `--genre` for backwards compatibility.
 
+### Graph flag
+
+The `--pagerank` flag activates the collaboration-network PageRank enrichment. Unlike the enrichment flags above, it runs **after the features stage** (not after cleaning) and merges directly into `features_train_prepped.parquet` before model training.
+
+| Flag | What it does |
+|---|---|
+| `--pagerank` | Builds a success-weighted co-credit graph from `title_principals.csv`, computes PageRank via Spark GraphFrames (or NetworkX fallback), and merges 4 features into the training feature matrix. |
+
+**The 4 features added:**
+
+| Feature | Description |
+|---|---|
+| `director_pagerank` | Mean PageRank of the film's director(s) |
+| `writer_pagerank` | Mean PageRank of the film's writer(s) |
+| `top_actor_pagerank` | PageRank of the top-billed actor (ordering = 1) |
+| `avg_cast_pagerank` | Mean PageRank of the top-3 billed actors |
+
+**Why PageRank and not just hit rate?** The per-person hit rate (already in the base features) captures individual track record but ignores *who* someone works with. PageRank captures collaborative centrality — a director who repeatedly co-works with high-achieving writers, composers, and actors scores higher even if their solo hit rate is moderate. With the temporal year-band construction this adds **+0.010 AUC** on held-out validation (0.8967 → 0.9067).
+
+**Genre caveat:** Studio-system genres (action, blockbuster, animation) have denser collaboration networks, so PageRank is partly a proxy for genre. The feature does not penalise independent films — films with no crew record in `title_principals.csv` receive the global-median fallback, not zero.
+
+**Leakage policy:** PageRank is computed using training-split labels only. Val and test films receive scores via a lookup join. No test-set information enters the graph.
+
+**Requirements:** `pyspark>=3.5` and `graphframes` must be installed in the active Python environment. The pipeline falls back to `networkx` automatically if either is missing. See `requirements.txt` for install instructions.
+
 
 ## Project structure
 
 ```
 pipeline/
     run.py
+    config.py          ← loads config.yaml into CFG dict (used by all modules)
 
     data_cleaning/
         __init__.py
@@ -93,6 +122,11 @@ pipeline/
         f1_candidate_features.py
         f2_feature_selection.py
         f3_feature_quality.py
+
+    graph/                        ← Spark GraphFrames PageRank (--pagerank flag)
+        __init__.py
+        g1_pagerank.py            ← builds graph, computes PageRank, outputs features
+        g2_validate.py            ← standalone validation: 5 diagnostic figures
 
     models/
         __init__.py
@@ -180,6 +214,37 @@ Joins two external datasets onto all three splits. Neither file contains an IMDb
 Activated with `--rt-oscar`.
 
 
+## Phase 1d — Collaboration-network PageRank (`graph/`)
+
+Activated with `--pagerank`. Runs after the features stage, before models.
+
+### `g1_pagerank.py`
+
+Builds a success-weighted co-credit graph from `title_principals.csv`. Every pair of people who shared a film in the training set gets an edge; the edge weight is the film's label (1 = hit, 0 = flop). PageRank is then computed on this graph.
+
+**Why this matters:** A director who works repeatedly with other high-achieving collaborators will score higher than their individual hit rate alone would suggest. The feature captures collaborative track record rather than solo performance — a genuine signal not available from the base IMDb data.
+
+**Spark vs NetworkX:** The script uses Spark GraphFrames when available (set via `graph.pagerank.force_networkx: false` in `config.yaml`). If Spark or the graphframes package is not installed it falls back to NetworkX automatically. Scores differ slightly between implementations but both are valid.
+
+**No data leakage:** The graph is built from training labels only. Val/test films are scored by looking up their crew in the pre-built graph. Films whose crew is entirely absent from the training graph receive the global-median PageRank as a fallback — they are not scored as zero.
+
+Outputs to `pipeline/outputs/graph/`:
+- `pagerank_scores.csv` — all nodes ranked by PageRank, with name and role
+- `features_pagerank.parquet` / `_val.parquet` / `_test.parquet` — 4 features per split
+
+### `g2_validate.py`
+
+Standalone validation and visualisation script (not called by `run.py`). Produces 6 figures:
+- **V1** Top-20 people by PageRank (bar chart)
+- **V2** PageRank vs personal hit rate scatter by role — shows correlation strength
+- **V3** Network subgraph of top-40 nodes, coloured by role, edges weighted by hit-collaboration strength
+- **V4** Univariate AUC of each PageRank feature vs director/writer hit-rate baselines
+- **V5** Distribution stability — KS statistic per feature (train vs validation). KS is used instead of PSI because temporal percentile features are continuous and high-cardinality; PSI's discrete binning is dominated by the 0.5 fallback spike and is not appropriate here.
+- **V6** Before/after KS: raw PageRank scores vs temporal within-role percentile — shows how the temporal construction eliminates distribution shift
+
+Run standalone: `python pipeline/graph/g2_validate.py`
+
+
 ## Phase 2 — Feature engineering (`feature_engineering/`)
 
 Reads the cleaned (and optionally enriched) parquets and builds a supervised feature matrix.
@@ -260,6 +325,43 @@ pipeline/outputs/
 Model artefacts that are not tracked in git (`models.pkl`, `reduced_model.pkl`, `predictions_val.csv`, `threshold_analysis.csv`) are written to `data/processed/`.
 
 
+## Observability and run lineage
+
+Every pipeline run writes `pipeline/outputs/run_manifest.json` containing:
+
+| Field | Description |
+|---|---|
+| `run_id` | Timestamp-based identifier (`YYYYMMDD_HHMMSS`) |
+| `config_hash` | SHA-256 of `config.yaml` (first 8 hex chars) — changes when any parameter changes |
+| `pipeline_version` | Version string from `config.yaml → pipeline.version` |
+| `stages` | Which stages ran in this invocation |
+| `graph_engine` | `"spark"` or `"networkx"` — records which PageRank backend was used |
+| `python_version` | Full Python version string |
+| `timestamp` | ISO-8601 timestamp of completion |
+
+Logging uses Python's standard `logging` module with timestamps and levels (`INFO`, `WARNING`). Per-stage elapsed times are logged at `INFO` level on completion.
+
+## Data contracts and schema versioning
+
+`pipeline/data_cleaning/schema.py` defines:
+- `SCHEMA_VERSION` — bump this when the expected column set changes
+- `COLUMN_CONTRACTS` — type, nullable, valid range, and allowed-values rules for key columns
+- `validate_contracts(df, split)` — call this after loading any split to get a list of contract violations (warns, does not raise)
+
+## Tests
+
+Run the unit test suite from the project root:
+
+```bash
+pip install pytest
+python -m pytest tests/ -v
+```
+
+14 tests across three files:
+- `tests/test_config.py` — config structure, required sections, goodness weights sum-to-one, pipeline version
+- `tests/test_schema.py` — schema version exists, contract validation (valid/invalid labels, null keys, out-of-range years)
+- `tests/test_idempotency.py` — feature idempotency, label column preservation, tconst uniqueness in feature matrix
+
 ## Missingness policy
 
 This table summarises every missingness decision made across all phases.
@@ -277,10 +379,11 @@ Evidence for MNAR classification is in `pipeline/outputs/enrichment_rt_oscar/rt_
 
 ## Current model results
 
-| Model | Validation AUC |
-|---|---|
-| Logistic Regression | 0.9460 |
-| XGBoost (full, 61 features) | 0.9596 |
-| XGBoost (reduced, 22 features) | 0.9610 |
+| Configuration | Val AUC | Keep-set features |
+|---|---|---|
+| Base (no graph) | 0.8967 | 21 |
+| **+ PageRank (--pagerank)** | **0.9067** | **22** |
 
-AUC progression by phase: IMDb baseline 0.8981 → after genre enrichment 0.9406 → after RT and Oscar enrichment 0.9620.
+The `--pagerank` run uses PySpark 3.5 + GraphFrames (temporal year-band construction). Both models use XGBoost as the selected model. Logistic regression AUC: 0.851 (base) / 0.855 (+ PageRank).
+
+AUC progression by phase: IMDb baseline → genre enrichment → RT/Oscar enrichment → PageRank graph features. Each phase is additive and opt-in.

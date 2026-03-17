@@ -21,9 +21,12 @@ Artifacts saved to data/processed/:
 """
 from __future__ import annotations
 
+import logging
 import pickle
 from pathlib import Path
 from typing import List, Optional
+
+log = logging.getLogger("pipeline.m1_train")
 
 import matplotlib
 matplotlib.use("Agg")
@@ -43,6 +46,7 @@ try:
     HAS_XGB = True
 except ImportError:
     HAS_XGB = False
+    log.warning("XGBoost not available — falling back to logistic regression only")
 
 # ── paths ──────────────────────────────────────────────────────────────────────
 ROOT       = Path(__file__).resolve().parents[2]   # big_data_assignment/
