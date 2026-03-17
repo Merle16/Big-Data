@@ -15,9 +15,5 @@ notebook>=7.0.7
 ipykernel>=6.29.0
 jupyterlab>=4.1.0
 # Graph features (--pagerank flag)
-# networkx is the fallback PageRank engine when Spark/GraphFrames is unavailable.
 networkx>=3.0
-# graphframes is the Spark GraphFrames Python wrapper. It cannot be installed
-# via pip in all environments — install it manually into the correct conda env:
-#   /path/to/conda/envs/<env>/bin/pip install graphframes
-# The pipeline falls back to networkx automatically if graphframes is missing.
+graphframes>=0.6.0

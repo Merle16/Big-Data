@@ -92,7 +92,7 @@ The `--pagerank` flag activates the collaboration-network PageRank enrichment. U
 
 **Leakage policy:** PageRank is computed using training-split labels only. Val and test films receive scores via a lookup join. No test-set information enters the graph.
 
-**Requirements:** `pyspark>=3.5` and `graphframes` must be installed in the active Python environment. The pipeline falls back to `networkx` automatically if either is missing. See `requirements.txt` for install instructions.
+**Requirements:** `pyspark>=3.5` and `graphframes>=0.6` — both listed in `requirements.txt`. The pipeline falls back to `networkx` automatically if either is missing.
 
 
 ## Project structure

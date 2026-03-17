@@ -3052,7 +3052,7 @@ def _graph_section() -> str:
 <tr style="background:#111;">
   <td style="padding:6px 10px;color:#F5C518;font-weight:bold;">PySpark + GraphFrames</td>
   <td style="padding:6px 10px;">PageRank on co-credit graph (Phase 1d)</td>
-  <td style="padding:6px 10px;">Spark keeps data in-memory across iterations — no HDFS round-trips between PageRank rounds. GraphFrames implements the Pregel model: vertex-centric message passing over a distributed DAG, with convergence detection built in. Lazy evaluation and the Catalyst query optimiser reduce redundant computation. Falls back to NetworkX automatically if Spark is unavailable, preserving correctness at smaller scale. PySpark 3.5 + GraphFrames installed in the <code>uva</code> conda environment.</td>
+  <td style="padding:6px 10px;">Spark keeps data in-memory across iterations — no HDFS round-trips between PageRank rounds. GraphFrames implements the Pregel model: vertex-centric message passing over a distributed DAG, with convergence detection built in. Lazy evaluation and the Catalyst query optimiser reduce redundant computation. Falls back to NetworkX automatically if Spark is unavailable, preserving correctness at smaller scale. Install via <code>pip install -r requirements.txt</code>.</td>
 </tr>
 <tr style="background:#0d0d1a;">
   <td style="padding:6px 10px;color:#9b59b6;font-weight:bold;">NetworkX (fallback)</td>
