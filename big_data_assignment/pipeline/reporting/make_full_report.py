@@ -3011,8 +3011,27 @@ def _graph_section() -> str:
     out.append(
         '<div class="phase-header" id="graph-overview">'
         '<span class="phase-pill pill-rto">Phase 1d</span>'
-        '<span class="phase-title">Collaboration-Network PageRank</span>'
+        '<span class="phase-title">Temporally Valid Graph Features — Leakage-Aware Big-Data Enrichment</span>'
         '</div>'
+    )
+
+    out.append(
+        '<p class="section-objective">'
+        'A <strong>collaboration-network PageRank</strong> enrichment computed with '
+        '<strong>PySpark 3.5 + GraphFrames</strong> on the full IMDB co-credit graph. '
+        'The defining design challenge is <strong>temporal leakage</strong>: a naive graph built from '
+        'all training films would score a 1985 film using collaboration patterns from 2010, making '
+        'PageRank nearly identical to lifetime hit rate and useless as an independent feature. '
+        'The solution is a <strong>year-band construction</strong>: for each film released in year Y, '
+        'the graph is built exclusively from training films released <em>before</em> Y. '
+        'Each film is scored against the network that actually existed at the time of its production. '
+        'This makes the feature both <em>leakage-free</em> and <em>temporally valid</em> — '
+        'a genuine enrichment rather than a disguised duplicate of hit rate. '
+        'The result: +0.010 AUC on held-out validation (0.8967 → 0.9067). '
+        '<br><strong>Temporal cutoffs:</strong> 1970, 1980, 1990, 1995, 2000, 2005, 2010, 2015, 2020 '
+        '&nbsp;·&nbsp; <strong>Engine:</strong> PySpark GraphFrames (NetworkX fallback) '
+        '&nbsp;·&nbsp; <strong>Features:</strong> 4 (director, writer, top actor, avg cast)'
+        '</p>'
     )
 
     # ── KPIs ──
@@ -3022,11 +3041,13 @@ def _graph_section() -> str:
         sc = pd.read_csv(scores_fp)
         kpis.append(_kpi(f"{len(sc):,}", "People scored"))
         kpis.append(_kpi(f"{sc['pagerank'].max():.4f}", "Max PageRank"))
-        kpis.append(_kpi(f"{sc['pagerank'].median():.4f}", "Median PageRank (fallback)"))
+        kpis.append(_kpi(f"{sc['pagerank'].median():.4f}", "Median fallback score"))
     feat_fp = G / "features_pagerank.parquet"
     if feat_fp.exists():
         pf = pd.read_parquet(feat_fp)
         kpis.append(_kpi(f"{len(pf):,}", "Train films scored"))
+    kpis.append(_kpi("9", "Year-band cutoffs"))
+    kpis.append(_kpi("+0.010", "Val AUC gain"))
     if kpis:
         out.append('<div class="kpi-row">' + "".join(kpis) + "</div>")
 
@@ -3345,7 +3366,7 @@ def _build_html(today: str) -> str:
   <a class="nav-link" href="#rto-4">RT features</a>
   <a class="nav-link" href="#rto-5">Oscar features</a>
 
-  <div class="nav-phase-label rto">Phase 1d · Graph PageRank</div>
+  <div class="nav-phase-label rto">Phase 1d · Temporal Graph Features</div>
   <a class="nav-link" href="#graph-overview">Overview</a>
   <a class="nav-link" href="#graph-methodology">G0 · Methodology</a>
   <a class="nav-link" href="#graph-top20">G1 · Top-20 by PageRank</a>
