@@ -182,7 +182,8 @@ def _pagerank_spark(
 
     print(f"[g1_pagerank] Running PageRank "
           f"(resetProbability={reset_prob}, tol={tol}, maxIter={max_iter})...")
-    results = g.pageRank(resetProbability=reset_prob, tol=tol, maxIter=max_iter)
+    # GraphFrames requires exactly one of maxIter or tol — use maxIter for reproducibility
+    results = g.pageRank(resetProbability=reset_prob, maxIter=max_iter)
 
     pr = (
         results.vertices
