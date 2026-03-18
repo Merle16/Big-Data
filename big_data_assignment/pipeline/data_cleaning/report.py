@@ -146,19 +146,46 @@ def _check_invariant(
     return lines
 
 
+
+# Columns where low coverage is structurally expected and is NOT a data quality problem.
+# These get an informative note instead of a warning/failure symbol.
+_EXPECTED_LOW_COVERAGE: dict[str, str] = {
+    "dir_avg_death_year": "expected — most directors are still alive",
+    "dir_min_death_year": "expected — most directors are still alive",
+    "wri_avg_death_year": "expected — most writers are still alive",
+    "wri_min_death_year": "expected — most writers are still alive",
+    # Birth years are recorded for most but not all people in name_basics.csv;
+    # ~25% absence is normal source-data sparsity, not a join failure.
+    "dir_avg_birth_year": "partial — not all people in name_basics.csv have birth years recorded",
+    "dir_min_birth_year": "partial — not all people in name_basics.csv have birth years recorded",
+    "wri_avg_birth_year": "partial — not all people in name_basics.csv have birth years recorded",
+    "wri_min_birth_year": "partial — not all people in name_basics.csv have birth years recorded",
+}
+
+
 def _check_join_coverage(clean_splits: dict[str, pd.DataFrame]) -> list[str]:
+    """Check fill rate for all LEFT-JOIN-derived columns.
+
+    Columns in _EXPECTED_LOW_COVERAGE are always reported as ✓ with an
+    explanatory note — their low fill rate is correct by design and must not
+    be mistaken for a broken join.
+    """
     lines = []
     train = clean_splits.get("train", pd.DataFrame())
     for col in _JOIN_COLS:
         if col not in train.columns:
             continue
         pct = (1 - train[col].isna().mean()) * 100
-        if pct >= 90:
+
+        if col in _EXPECTED_LOW_COVERAGE:
+            note = f"  ← {_EXPECTED_LOW_COVERAGE[col]}"
+            sym  = "✓"
+        elif pct >= 90:
             sym  = "✓"
             note = ""
         elif pct >= 70:
             sym  = "⚠"
-            note = "  ← coverage below 90%"
+            note = "  ← coverage below 90%; investigate whether source data is complete"
         else:
             sym  = "✗"
             note = "  ← low coverage; check JOIN key or source table"

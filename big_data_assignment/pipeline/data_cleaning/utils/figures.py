@@ -59,6 +59,16 @@ JOIN_COLS = [
     "wri_count", "wri_avg_birth_year", "wri_min_birth_year", "wri_avg_death_year",
 ]
 
+# Columns where low fill rate is structurally expected (not a join defect).
+# Death year: most people are still alive.
+# Birth year: not all people in name_basics.csv have birth years recorded.
+_JOIN_EXPECTED_LOW: set[str] = {
+    "dir_avg_death_year", "dir_min_death_year",
+    "wri_avg_death_year", "wri_min_death_year",
+    "dir_avg_birth_year", "dir_min_birth_year",
+    "wri_avg_birth_year", "wri_min_birth_year",
+}
+
 SPLIT_COLORS = {"train": BLU, "validation_hidden": ORG, "test_hidden": GRN}
 SPLIT_LABELS = {"train": "train", "validation_hidden": "val", "test_hidden": "test"}
 
@@ -239,7 +249,12 @@ def label_balance(train_clean: pd.DataFrame) -> plt.Figure:
 # ── 4. Join coverage ─────────────────────────────────────────────────────────
 
 def join_coverage(clean_splits: dict[str, pd.DataFrame]) -> plt.Figure:
-    """Horizontal bars: % non-null for every column that originates from a JOIN."""
+    """Horizontal bars: % non-null for every column that originates from a JOIN.
+
+    Columns in _JOIN_EXPECTED_LOW (death/birth years) are shown in orange with a
+    dashed border to indicate their low coverage is structurally expected, not a
+    join defect.  Red bars indicate genuinely broken joins.
+    """
     train   = clean_splits.get("train", pd.DataFrame())
     present = [c for c in JOIN_COLS if c in train.columns]
 
@@ -249,23 +264,49 @@ def join_coverage(clean_splits: dict[str, pd.DataFrame]) -> plt.Figure:
     coverage  = sorted([(c, (1 - train[c].isna().mean()) * 100) for c in present],
                        key=lambda x: x[1])
     col_names, vals = zip(*coverage)
-    colors = [C_OK if v >= 90 else C_WARN if v >= 70 else C_FAIL for v in vals]
+
+    # Colour logic:
+    #   Gold   = structurally expected low coverage (death/birth year sparsity)
+    #   Green  = ≥ 90%
+    #   Orange = < 90% but not expected-low (worth investigating)
+    #   Red    = < 70% and NOT expected-low (join defect)
+    colors = []
+    for c, v in zip(col_names, vals):
+        if c in _JOIN_EXPECTED_LOW:
+            colors.append(Y)
+        elif v >= 90:
+            colors.append(C_OK)
+        elif v >= 70:
+            colors.append(C_WARN)
+        else:
+            colors.append(C_FAIL)
 
     fig, ax = plt.subplots(figsize=(14, max(5, len(present) * 0.52)))
     ax.barh(col_names, vals, color=colors, alpha=0.88, edgecolor="none")
     ax.axvline(90, color=MUT, linestyle="--", linewidth=1, label="90% threshold")
-    ax.set_xlim(0, 112)
+    ax.set_xlim(0, 120)
     ax.set_xlabel("% non-null", fontsize=11, color=TXT, labelpad=8)
-    ax.set_title("Join coverage: LEFT JOIN fill rates (training split)", fontsize=13,
-                 fontweight="bold", color=TXT, pad=12)
+    ax.set_title(
+        "Join coverage: LEFT JOIN fill rates (training split)\n"
+        "Gold bars = structurally expected low coverage (death/birth year source sparsity)",
+        fontsize=12, fontweight="bold", color=TXT, pad=12,
+    )
     ax.title.set_position([0.5, 1.02])
 
-    y_max = ax.get_xlim()[1]
-    for i, v in enumerate(vals):
-        ax.text(v + 0.005 * y_max, i, f"{v:.1f}%", va="center",
-                fontsize=8, color=TXT)
+    x_max = ax.get_xlim()[1]
+    for i, (c, v) in enumerate(zip(col_names, vals)):
+        note = " (expected)" if c in _JOIN_EXPECTED_LOW else ""
+        ax.text(v + 0.005 * x_max, i, f"{v:.1f}%{note}", va="center",
+                fontsize=7.5, color=TXT)
 
-    ax.legend(fontsize=9)
+    from matplotlib.patches import Patch
+    legend_elements = [
+        Patch(facecolor=C_OK,   alpha=0.88, label="≥ 90%  — OK"),
+        Patch(facecolor=C_WARN, alpha=0.88, label="70–90% — investigate"),
+        Patch(facecolor=C_FAIL, alpha=0.88, label="< 70%  — join defect"),
+        Patch(facecolor=Y,      alpha=0.88, label="any %  — structurally expected"),
+    ]
+    ax.legend(handles=legend_elements, fontsize=8, loc="lower right")
     fig.tight_layout(pad=2.5)
     return fig
 
@@ -397,10 +438,17 @@ def imputation_invariant(
 # ── 7. Imputation justification table ────────────────────────────────────────
 
 _IMPUTATION_MECHANISMS: dict[str, tuple[str, str]] = {
-    "startYear":      ("MAR",  "Correlated with titleType & genres"),
-    "runtimeMinutes": ("MAR",  "Correlated with titleType"),
-    "numVotes":       ("MCAR", "Random source omission; log-transformed in s6 before imputation"),
-    "originalTitle":  ("MCAR", "Rare — typically identical to primaryTitle"),
+    "startYear":      ("MAR",        "Correlated with titleType & era (older films less documented)"),
+    "runtimeMinutes": ("MAR",        "Correlated with titleType (shorts vs features differ systematically)"),
+    "numVotes":       ("not missing","Rarely/never missing in raw data; log1p-transformed to numVotes_log1p in step 6"),
+    "originalTitle":  ("structural", "Absent = identical to primaryTitle (no separate localisation)"),
+}
+
+_STRATEGY: dict[str, str] = {
+    "startYear":      "MICE (IterativeImputer, fit on train only)",
+    "runtimeMinutes": "MICE (IterativeImputer, fit on train only)",
+    "numVotes":       "log1p transform → numVotes_log1p  (no imputation; 0% missing)",
+    "originalTitle":  "keep as-is  (structural absence = informative)",
 }
 
 def imputation_summary(raw_splits: dict[str, pd.DataFrame]) -> plt.Figure:
@@ -422,8 +470,7 @@ def imputation_summary(raw_splits: dict[str, pd.DataFrame]) -> plt.Figure:
             pcts.append(f"{pct:.1f}%")
             if pct > 5:
                 has_high = True
-        strategy = ("MICE (IterativeImputer, fit on train)"
-                    if col in ("startYear", "runtimeMinutes", "numVotes") else "keep as-is")
+        strategy = _STRATEGY.get(col, "keep as-is")
         rows.append([col, mech] + pcts + [strategy, rationale])
         if has_high:
             highlight.add(idx)

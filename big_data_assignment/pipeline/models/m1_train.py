@@ -218,10 +218,13 @@ def _fig_confusion(probs, y_val, threshold=0.5, title="Confusion matrix",
     ax.set_yticklabels(["True 0", "True 1"], fontsize=9)
     ax.set_title(title, fontsize=13, fontweight="bold", color=TXT, pad=12)
     ax.title.set_position([0.5, 1.02])
+    # Diagonal cells use the yellow colormap end (bright) → dark text;
+    # off-diagonal cells use the dark colormap end → white text.
     for i in range(2):
         for j in range(2):
+            cell_color = TXT if i != j else BG
             ax.text(j, i, str(cm[i, j]), ha="center", va="center",
-                    color=BG, fontsize=14, fontweight="bold")
+                    color=cell_color, fontsize=14, fontweight="bold")
     cbar = plt.colorbar(im, ax=ax, shrink=0.8)
     cbar.ax.tick_params(labelsize=8, colors=MUT)
     fig.tight_layout(pad=2.5)
