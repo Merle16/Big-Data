@@ -450,15 +450,43 @@ def run(state: dict) -> dict:
     # ── xgboost ────────────────────────────────────────────────────────────────
     xgb_model = None; xgb_probs = None; xgb_probs_test = None
     xgb_auc = None; xgb_auc_test = None; xgb_acc = None; xgb_acc_test = None
+    xgb_best_params: dict = {}
     if HAS_XGB:
-        print("[m1_train] Fitting XGBoost...")
-        _xcfg     = _CFG.get("models", {}).get("xgboost", {})
+        _xcfg      = _CFG.get("models", {}).get("xgboost", {})
+        n_trials   = int(_xcfg.get("n_tune_trials", 20))
+
+        # ── random hyperparameter search on val (test never touched) ───────────
+        rng = np.random.default_rng(SEED)
+        _param_grid = {
+            "n_estimators":     [200, 300, 500, 700],
+            "max_depth":        [3, 4, 5, 6],
+            "learning_rate":    [0.01, 0.03, 0.05, 0.10],
+            "subsample":        [0.70, 0.80, 0.85, 0.90],
+            "colsample_bytree": [0.60, 0.75, 0.85, 0.90],
+            "min_child_weight": [1, 2, 3],
+            "reg_lambda":       [0.5, 1.0, 2.0],
+        }
+        best_val_auc  = -1.0
+        best_raw_params: dict = {}
+        print(f"[m1_train] XGBoost random search: {n_trials} trials scored on val …")
+        for trial in range(n_trials):
+            params = {k: rng.choice(v).item() for k, v in _param_grid.items()}
+            _m = XGBClassifier(
+                **params,
+                objective="binary:logistic", eval_metric="logloss",
+                tree_method="hist", n_jobs=4, random_state=SEED, verbosity=0,
+            )
+            _m.fit(X_tr, y_tr, verbose=False)
+            _auc = float(roc_auc_score(y_vl, _m.predict_proba(X_vl)[:, 1]))
+            if _auc > best_val_auc:
+                best_val_auc  = _auc
+                best_raw_params = params
+        xgb_best_params = best_raw_params
+        print(f"[m1_train] Best val AUC from search: {best_val_auc:.4f}  params: {best_raw_params}")
+
+        print("[m1_train] Fitting XGBoost (best params)...")
         xgb_model = XGBClassifier(
-            n_estimators=int(_xcfg.get("n_estimators", 500)),
-            max_depth=int(_xcfg.get("max_depth", 5)),
-            learning_rate=float(_xcfg.get("learning_rate", 0.05)),
-            subsample=float(_xcfg.get("subsample", 0.85)),
-            colsample_bytree=float(_xcfg.get("colsample_bytree", 0.85)),
+            **xgb_best_params,
             objective="binary:logistic", eval_metric="logloss",
             tree_method="hist", n_jobs=4, random_state=SEED, verbosity=0,
         )
@@ -549,6 +577,7 @@ def run(state: dict) -> dict:
             "f1_fixed":   None if xgb_m_05    is None else xgb_m_05["f1"],
             "f1_youden":  None if xgb_m_youden is None else xgb_m_youden["f1"],
             "selected": best == "XGBoost",
+            **{f"param_{k}": v for k, v in xgb_best_params.items()},
         }])], ignore_index=True)
 
     # ── save CSVs ──────────────────────────────────────────────────────────────
