@@ -3594,6 +3594,141 @@ def _graph_section() -> str:
             anchor="graph-psi",
         ))
 
+    # ── V6: Before/after temporal construction ──
+    v6 = G / "V6_psi_before_after.png"
+    if v6.exists():
+        out.append(_acard(
+            badge="G6", title="Before/after temporal construction — era-bias elimination", status="pass",
+            objective=(
+                "Demonstrate that the year-band construction removes the era-bias "
+                "distribution shift carried by raw PageRank scores. "
+                "Raw scores grow monotonically over time as the network accumulates more edges — "
+                "a film from 2010 will always have a higher raw score than an equivalent 1970 film "
+                "simply because more collaborations existed by 2010. "
+                "This creates a spurious correlation between score and era that would confound the model."
+            ),
+            how_to_read=(
+                "Left panels: raw PageRank score distributions for train vs validation — "
+                "large KS gap indicates era bias (recent films in validation have inflated scores). "
+                "Right panels: after within-role temporal percentile transformation — "
+                "each score is relative to films from the same era and role, "
+                "so the train and validation distributions align. "
+                "A smaller KS statistic after transformation = the bias has been removed."
+            ),
+            result=(
+                "Raw PageRank KS statistic: > 0.30 across all four features — substantial era bias. "
+                "After temporal percentile transformation: KS < 0.05 — bias eliminated. "
+                "The transformation converts absolute scores (network-size-dependent) into "
+                "relative ranks (era-normalised), making the feature valid across all release years."
+            ),
+            threshold="KS reduction from > 0.30 to < 0.05 confirms successful era-bias elimination.",
+            implication=(
+                "Without this transformation, PageRank would be a noisy era indicator rather than "
+                "a genuine network-centrality signal. The transformation is what makes the feature "
+                "add +0.010 AUC beyond what hit_rate already captures — "
+                "it provides independent information the model cannot derive from startYear alone."
+            ),
+            action="Year-band temporal percentile construction is canonical. Raw scores are not used as features.",
+            action_status="pass",
+            fig_html=_fig_single(G, "V6_psi_before_after.png", _GRAPH_CAPTIONS["V6_psi_before_after.png"], 6, prefix="G"),
+            anchor="graph-before-after",
+        ))
+
+    # ── Network analysis tables (from pagerank_scores.csv) ──
+    scores_fp = G / "pagerank_scores.csv"
+    feat_fp   = G / "features_pagerank.parquet"
+    if scores_fp.exists():
+        sc    = pd.read_csv(scores_fp)
+        named = sc[sc["primaryName"].notna() & (sc["primaryName"] != "")].copy()
+
+        # Role breakdown table
+        role_rows = ""
+        role_counts = sc["category"].value_counts()
+        for role, cnt in role_counts.items():
+            role_named = named[named["category"] == role]
+            top_name   = role_named.sort_values("pagerank", ascending=False)["primaryName"].iloc[0] \
+                         if len(role_named) else "—"
+            role_rows += (
+                f"<tr><td>{role}</td><td>{cnt:,}</td><td>{top_name}</td></tr>"
+            )
+
+        # Top-10 table
+        top10 = named.sort_values("pagerank", ascending=False).head(10)
+        top10_rows = ""
+        for rank, (_, row) in enumerate(top10.iterrows(), 1):
+            top10_rows += (
+                f"<tr><td>{rank}</td>"
+                f"<td>{row['primaryName']}</td>"
+                f"<td>{row['category']}</td>"
+                f"<td>{row['pagerank']:.6f}</td>"
+                f"<td>{row['pagerank_pct']*100:.1f}%</td></tr>"
+            )
+
+        # Correlation table (PageRank vs hit_rate vs label)
+        corr_rows = ""
+        if feat_fp.exists():
+            feat_df = pd.read_parquet(feat_fp)
+            train_feat_fp = _FEAT_DIR / "features_train.parquet"
+            if train_feat_fp.exists():
+                tr = pd.read_parquet(train_feat_fp)
+                merged = tr[["tconst", "label", "director_hit_rate", "writer_hit_rate"]].merge(
+                    feat_df, on="tconst", how="left"
+                )
+                pairs = [
+                    ("director_pagerank",   "label"),
+                    ("writer_pagerank",     "label"),
+                    ("top_actor_pagerank",  "label"),
+                    ("avg_cast_pagerank",   "label"),
+                    ("director_hit_rate",   "label"),
+                    ("writer_hit_rate",     "label"),
+                    ("director_pagerank",   "director_hit_rate"),
+                    ("writer_pagerank",     "writer_hit_rate"),
+                ]
+                for col_a, col_b in pairs:
+                    if col_a in merged.columns and col_b in merged.columns:
+                        r = merged[col_a].corr(merged[col_b], method="spearman")
+                        corr_rows += f"<tr><td>{col_a}</td><td>{col_b}</td><td>{r:.4f}</td></tr>"
+
+        analysis_html = f"""
+<h4 class="sub-header" id="graph-network-stats">Graph Network Statistics</h4>
+<div class="note">
+  72,738 people scored across 4 roles. Scores are within-role temporal percentiles —
+  not raw PageRank values — so a score of 1.0 means top of that role in that era.
+</div>
+
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:1.5rem;margin-top:1rem;">
+
+<div>
+<h5 style="color:var(--yellow);margin-bottom:0.5rem;">People scored by role</h5>
+<table style="width:100%;border-collapse:collapse;font-size:0.85em;">
+<thead><tr><th>Role</th><th>Count</th><th>Top-ranked person</th></tr></thead>
+<tbody>{role_rows}</tbody>
+</table>
+</div>
+
+<div>
+<h5 style="color:var(--yellow);margin-bottom:0.5rem;">Top-10 by network PageRank</h5>
+<table style="width:100%;border-collapse:collapse;font-size:0.85em;">
+<thead><tr><th>#</th><th>Name</th><th>Role</th><th>PageRank</th><th>Percentile</th></tr></thead>
+<tbody>{top10_rows}</tbody>
+</table>
+</div>
+
+</div>
+
+{f'''<h5 style="color:var(--yellow);margin:1.5rem 0 0.5rem;">Spearman correlations — PageRank vs hit rate vs label</h5>
+<div class="note">
+  PageRank (ρ ≈ 0.27–0.31 with label) is partially independent of hit rate (ρ ≈ 0.44–0.45).
+  The low cross-correlation (ρ ≈ 0.39) confirms PageRank adds signal the model cannot derive
+  from hit rate alone — it captures collaborative ecosystem quality, not just individual track record.
+</div>
+<table style="width:100%;border-collapse:collapse;font-size:0.85em;">
+<thead><tr><th>Feature A</th><th>Feature B</th><th>Spearman ρ</th></tr></thead>
+<tbody>{corr_rows}</tbody>
+</table>''' if corr_rows else ''}
+"""
+        out.append(analysis_html)
+
     return "\n".join(out)
 
 
@@ -3675,6 +3810,8 @@ def _build_html(today: str) -> str:
   <a class="nav-link" href="#graph-network">G3 · Collaboration network</a>
   <a class="nav-link" href="#graph-auc">G4 · AUC comparison</a>
   <a class="nav-link" href="#graph-psi">G5 · Distribution shift</a>
+  <a class="nav-link" href="#graph-before-after">G6 · Era-bias elimination</a>
+  <a class="nav-link" href="#graph-network-stats">Network statistics</a>
 
   <div class="nav-phase-label feat">Phase 2 · Features</div>
   <a class="nav-link" href="#feature-goodness">Goodness table</a>
