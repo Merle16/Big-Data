@@ -409,6 +409,18 @@ def run(state: dict) -> dict:
                  if c not in ("tconst", "label", "primaryTitle", "canonical_title")
                  and feat_df[c].notna().sum() > 0]
 
+    # Guard against silent schema drift when enrichment files are missing.
+    # The full pipeline (--genre --rt-oscar --pagerank) produces 60+ features.
+    # Fewer than 20 means at least one enrichment stage was silently skipped.
+    _MIN_FEATURES = 20
+    if len(feat_cols) < _MIN_FEATURES:
+        raise RuntimeError(
+            f"[m1_train] Only {len(feat_cols)} features found — expected at least {_MIN_FEATURES}. "
+            f"Likely cause: enrichment files missing (run with --genre --rt-oscar --pagerank). "
+            f"Found: {feat_cols}"
+        )
+    print(f"[m1_train] {len(feat_cols)} features loaded.")
+
     feat_df, X_tr, X_vl, X_te, y_tr, y_vl, y_te, train_idx, val_idx, test_idx = _prep_splits(feat_df, feat_cols)
     y_val_np  = y_vl.to_numpy()
     y_test_np = y_te.to_numpy()

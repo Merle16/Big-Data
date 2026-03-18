@@ -2003,12 +2003,25 @@ def _model_section() -> str:
         '<span class="phase-title">Model Training</span>'
         '</div>'
         '<p class="section-objective">'
-        'Two classifiers are trained on the 28-feature matrix: L2-regularised logistic regression '
-        '(interpretable baseline) and XGBoost (primary model). Both are evaluated on the held-out '
-        'validation set. A diagnostic pass computes permutation importance and SHAP values. '
+        'Two classifiers are trained on the feature matrix: L2-regularised logistic regression '
+        '(interpretable baseline) and XGBoost (primary model). '
+        'Evaluation uses a <strong>60 / 20 / 20 stratified split</strong>: '
+        'train (model fitting) · val (threshold calibration, model selection) · test (held-out, final honest estimate). '
+        'A diagnostic pass computes permutation importance and SHAP values. '
         'An ablation study determines the minimum keep-set that preserves full-model AUC. '
         'The final reduced model is retrained on the optimal feature subset.'
         '</p>'
+        '<div class="note">'
+        '<strong>Known limitations:</strong> '
+        '(1) <strong>numVotes_log1p</strong> partially encodes post-release popularity — a film with 100k votes '
+        'is already popular at prediction time, so the feature is partly predictive of the past rather than the future. '
+        'The temporal holdout split (train ≤ 2013 / eval > 2013) mitigates but does not fully eliminate this. '
+        'numVotes is retained because it is a valid signal at the time of prediction (e.g. after the opening weekend). '
+        '(2) <strong>OOF hit-rate encoding</strong> is leak-free within training folds (leave-one-out). '
+        'At inference time (val/test), the lookup table is fitted on all 7,959 training films — '
+        'directors with multiple training films get a slightly more precise estimate than at real deployment. '
+        'This is standard practice and unavoidable without a separate calibration corpus.'
+        '</div>'
     )
     out.append('<h3 id="model-kpis">Key Metrics</h3>')
     out.append(_model_kpis())
@@ -2195,17 +2208,23 @@ def _model_section() -> str:
         "MODEL 09", "Logistic Regression Coefficients (Top 20 by |coef|)", "info",
         "Shows the magnitude and direction of standardised logistic regression coefficients. "
         "Positive coefficients increase the log-odds of being a hit; negative coefficients decrease "
-        "them. Coefficient magnitude after standardisation is comparable across features.",
-        "Horizontal bars with positive (green) and negative (red) colours. Magnitude = importance. "
-        "Direction = association with hit class. Features with very small coefficients contribute "
-        "little to the linear prediction.",
+        "them. Coefficient magnitude after standardisation is comparable across features. "
+        "⚠ Comparability caveat: LR coefficients are computed on StandardScaler-normalised features. "
+        "XGBoost (MODEL 08) sees raw unscaled features. The two importance rankings are directionally "
+        "consistent but their magnitudes cannot be directly compared — a coefficient of 2.0 in LR "
+        "does not imply the same importance as a gain score of 2.0 in XGBoost.",
+        "Horizontal bars with positive (green) and negative (red) colours. Magnitude = importance "
+        "within LR only. Direction = association with hit class. Use MODEL 10 (permutation AUC drop) "
+        "or MODEL 11 (SHAP) for model-agnostic importance that is comparable across both models.",
         "writer_hit_rate and director_hit_rate dominate. numVotes_log1p has a strong positive "
         "coefficient (more votes → more likely hit). isAdult has a negative coefficient.",
         "Coefficient interpretation assumes feature independence — logistic regression coefficients "
-        "are less reliable when features are correlated.",
-        "The dominant features match XGBoost's importance ranking, confirming signal is real "
-        "and not model-specific. The logistic model provides a linear baseline for interpretation.",
-        "No action needed.",
+        "are less reliable when features are correlated. Use permutation importance (MODEL 10) for "
+        "correlated-feature importance estimation.",
+        "Top features consistent with XGBoost gain and SHAP rankings, confirming signal is real. "
+        "For cross-model importance comparison use MODEL 10 (permutation) or MODEL 11 (SHAP) — "
+        "both are model-agnostic and operate on the same scale.",
+        "Use MODEL 10 / MODEL 11 for cross-model importance comparisons.",
         "pass",
         _fig_single(F, "09_logistic_coefs.png", "Logistic regression coefficients (top 20 by |coef|)", 9, "MODEL"),
     ))

@@ -125,6 +125,19 @@ DISPOSITION_REGISTRY = [
     {"feature": "title_sim_to_hit",        "action": "keep_numeric",     "imputation": "zero_fill",    "scaling": "standard",  "struct_miss": "no",      "justification": "Cosine similarity; bounded; 0 is valid default."},
     {"feature": "title_sim_to_non_hit",    "action": "keep_numeric",     "imputation": "zero_fill",    "scaling": "standard",  "struct_miss": "no",      "justification": "Cosine similarity."},
     {"feature": "title_sim_margin",        "action": "keep_numeric",     "imputation": "zero_fill",    "scaling": "standard",  "struct_miss": "no",      "justification": "Margin = hit_sim - non_hit_sim."},
+    # Decade one-hot dummies — era encoding without imposing a linear year trend.
+    # Raw startYear treats 1950→1960 as the same step as 2000→2010, which is false.
+    # Dummies let the model learn non-linear era effects independently per decade.
+    {"feature": "decade_pre1950",          "action": "keep_flag_only",   "imputation": "none",         "scaling": "none",      "struct_miss": "no",      "justification": "Era dummy: pre-1950 classic cinema."},
+    {"feature": "decade_1950s",            "action": "keep_flag_only",   "imputation": "none",         "scaling": "none",      "struct_miss": "no",      "justification": "Era dummy: 1950s."},
+    {"feature": "decade_1960s",            "action": "keep_flag_only",   "imputation": "none",         "scaling": "none",      "struct_miss": "no",      "justification": "Era dummy: 1960s."},
+    {"feature": "decade_1970s",            "action": "keep_flag_only",   "imputation": "none",         "scaling": "none",      "struct_miss": "no",      "justification": "Era dummy: 1970s."},
+    {"feature": "decade_1980s",            "action": "keep_flag_only",   "imputation": "none",         "scaling": "none",      "struct_miss": "no",      "justification": "Era dummy: 1980s."},
+    {"feature": "decade_1990s",            "action": "keep_flag_only",   "imputation": "none",         "scaling": "none",      "struct_miss": "no",      "justification": "Era dummy: 1990s."},
+    {"feature": "decade_2000s",            "action": "keep_flag_only",   "imputation": "none",         "scaling": "none",      "struct_miss": "no",      "justification": "Era dummy: 2000s."},
+    {"feature": "decade_2010s",            "action": "keep_flag_only",   "imputation": "none",         "scaling": "none",      "struct_miss": "no",      "justification": "Era dummy: 2010s."},
+    {"feature": "decade_2020s",            "action": "keep_flag_only",   "imputation": "none",         "scaling": "none",      "struct_miss": "no",      "justification": "Era dummy: 2020s."},
+    {"feature": "decade_2020plus",         "action": "keep_flag_only",   "imputation": "none",         "scaling": "none",      "struct_miss": "no",      "justification": "Era dummy: 2020+ streaming era."},
 ]
 
 ACTION_COLOR = {

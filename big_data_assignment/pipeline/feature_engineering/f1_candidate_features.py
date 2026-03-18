@@ -141,10 +141,22 @@ FEATURE_MOTIVATION = {
     "title_sim_to_hit":        "Cosine similarity of title TF-IDF to hit centroid.",
     "title_sim_to_non_hit":    "Cosine similarity of title TF-IDF to non-hit centroid.",
     "title_sim_margin":        "Net semantic tilt toward hit-like vs non-hit-like title language.",
+    "decade_1950s":            "Era dummy: film released in 1950s (non-linear era effect).",
+    "decade_1960s":            "Era dummy: film released in 1960s.",
+    "decade_1970s":            "Era dummy: film released in 1970s.",
+    "decade_1980s":            "Era dummy: film released in 1980s.",
+    "decade_1990s":            "Era dummy: film released in 1990s.",
+    "decade_2000s":            "Era dummy: film released in 2000s.",
+    "decade_2010s":            "Era dummy: film released in 2010s.",
+    "decade_2020s":            "Era dummy: film released in 2020s.",
+    "decade_pre1950":          "Era dummy: film released before 1950 (classic era).",
+    "decade_2020plus":         "Era dummy: film released 2020 or later (streaming era).",
 }
 
 FEATURE_GROUPS = {
-    "base":       ["title_len", "title_word_count", "title_upper_ratio", "startYear", "year_span", "numVotes_log1p"],
+    "base":       ["title_len", "title_word_count", "title_upper_ratio", "startYear", "year_span", "numVotes_log1p",
+                   "decade_pre1950", "decade_1950s", "decade_1960s", "decade_1970s", "decade_1980s",
+                   "decade_1990s", "decade_2000s", "decade_2010s", "decade_2020s", "decade_2020plus"],
     "binary":     ["title_has_digit", "title_has_colon", "title_has_question", "has_original_title",
                    "runtime_missing", "votes_missing", "start_missing", "end_missing"],
     "aggregates": ["num_directors", "num_unique_directors", "num_writers", "num_unique_writers", "is_auteur"],
@@ -205,6 +217,18 @@ def add_base_features(df: pd.DataFrame) -> pd.DataFrame:
         )
         .clip(lower=0)
     )
+
+    # Decade bucket features — era encoding without treating year as continuous.
+    # Raw startYear as a linear feature assumes a monotonic trend across all time,
+    # which is false (1950s genre norms ≠ 1990s genre norms ≠ 2010s genre norms).
+    # One-hot decade dummies let the model learn non-linear era effects.
+    year = pd.to_numeric(out["startYear"], errors="coerce")
+    decade = (year // 10 * 10).astype("Int64")
+    for d in [1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020]:
+        out[f"decade_{d}s"] = (decade == d).astype(float)
+    # Pre-1950 and post-2020 get their own catch-all buckets
+    out["decade_pre1950"] = (year < 1950).fillna(0).astype(float)
+    out["decade_2020plus"] = (year >= 2020).fillna(0).astype(float)
 
     # numVotes_log1p: skip recompute if already present
     if "numVotes_log1p" not in out.columns:
@@ -954,6 +978,8 @@ def run(state: dict) -> dict:
         + (["title_group_size_train", "title_unique_years_train", "title_conflicting_years",
             "title_sim_to_hit", "title_sim_to_non_hit", "title_sim_margin"]
            if "title_group_size_train" in train_feat.columns else [])
+        + [f"decade_{d}s" for d in [1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020]]
+        + ["decade_pre1950", "decade_2020plus"]
         + genre_feat_cols
         + rt_oscar_feat_cols
     )
