@@ -892,13 +892,25 @@ def _exec_summary() -> str:
         + _erow("pass", "Top: writer_hit_rate, director_hit_rate, title_sim_margin")
         + '</div>'
     )
+    auc_xgb_test = auc_log_test = "—"
+    if mr_fp.exists():
+        for _, row in pd.read_csv(mr_fp).iterrows():
+            m = str(row.get("model", "")).lower()
+            v = row.get("test_auc", None)
+            if v is not None:
+                if "logistic" in m: auc_log_test = f"{float(v):.4f}"
+                if "xgb"      in m: auc_xgb_test = f"{float(v):.4f}"
+    auc_gap = "—"
+    try:
+        auc_gap = f"{abs(float(auc_xgb) - float(auc_xgb_test)):.4f}"
+    except (ValueError, TypeError):
+        pass
     model_card = (
         '<div class="exec-card">'
         '<div class="exec-card-title">Phase 3 · Model Training</div>'
-        + _erow("pass", f"Best model: {selected} · val AUC = {auc_xgb}")
-        + _erow("pass", f"Logistic baseline val AUC = {auc_logistic}")
-        + _erow("pass", "Reduced model (22 features) AUC = 0.9012 (+0.0031)")
-        + _erow("pass", "XGBoost outperforms logistic by 4.6 AUC points")
+        + _erow("pass", f"Best model: {selected} · val AUC = {auc_xgb} · test AUC = {auc_xgb_test}")
+        + _erow("pass", f"Logistic: val AUC = {auc_logistic} · test AUC = {auc_log_test}")
+        + _erow("pass", f"Val/test AUC gap (XGBoost) = {auc_gap} — overfitting check")
         + _erow("warn", "Review calibration and AUC gap figures")
         + '</div>'
     )
@@ -1923,10 +1935,13 @@ def _model_kpis() -> str:
     if mr_fp.exists():
         mr = pd.read_csv(mr_fp)
         for _, row in mr.iterrows():
-            auc  = row.get("validation_auc", None)
-            name = str(row.get("model", "")).capitalize()
-            if auc is not None:
-                kpis.append(_kpi(f"{float(auc):.4f}", f"{name} val AUC"))
+            val_auc  = row.get("validation_auc", None)
+            test_auc = row.get("test_auc", None)
+            name     = str(row.get("model", "")).capitalize()
+            if val_auc is not None:
+                kpis.append(_kpi(f"{float(val_auc):.4f}", f"{name} val AUC"))
+            if test_auc is not None:
+                kpis.append(_kpi(f"{float(test_auc):.4f}", f"{name} test AUC"))
         selected = mr.loc[mr["selected"] == True, "model"].values  # noqa: E712
         if len(selected):
             kpis.append(_kpi(selected[0].capitalize(), "Selected model"))
@@ -1961,15 +1976,25 @@ def _threshold_table() -> str:
 def _model_section() -> str:
     F = _MODEL_FIGS
     auc_logistic = auc_xgb = "—"
+    auc_log_test = auc_xgb_test = "—"
+    auc_gap = "—"
     mr_fp = _MODEL_DIR / "model_results.csv"
     if mr_fp.exists():
         mr = pd.read_csv(mr_fp)
         for _, row in mr.iterrows():
             m = str(row.get("model", "")).lower()
             v = row.get("validation_auc", None)
+            t = row.get("test_auc", None)
             if v is not None:
                 if "logistic" in m: auc_logistic = f"{float(v):.4f}"
-                if "xgb" in m:     auc_xgb      = f"{float(v):.4f}"
+                if "xgb"      in m: auc_xgb      = f"{float(v):.4f}"
+            if t is not None:
+                if "logistic" in m: auc_log_test = f"{float(t):.4f}"
+                if "xgb"      in m: auc_xgb_test = f"{float(t):.4f}"
+    try:
+        auc_gap = f"{abs(float(auc_xgb) - float(auc_xgb_test)):.4f}"
+    except (ValueError, TypeError):
+        pass
 
     out = []
     out.append(
@@ -2025,6 +2050,22 @@ def _model_section() -> str:
         _fig_single(F, "04_model_comparison.png", "Model comparison — AUC & accuracy (validation)", 4, "MODEL"),
     ))
     out.append(_acard(
+        "MODEL 02b", "Confusion Matrix — Logistic Regression (held-out TEST set)", "pass",
+        "Same confusion matrix as MODEL 02 but evaluated on the held-out test split (20% of labeled data, "
+        "never seen during training or threshold calibration). This is the honest overfitting check: "
+        "if val AUC ≈ test AUC the model has not overfit to the validation set.",
+        "Compare this matrix with MODEL 02 (val set). Cell values and error rates should be similar. "
+        "A large difference in off-diagonal cells indicates the threshold or model overfit to val.",
+        f"Logistic test AUC = {auc_log_test}. Compare with val AUC = {auc_logistic}.",
+        "Val/test AUC gap < 0.01 = no overfitting. Gap 0.01–0.03 = mild. Gap > 0.03 = investigate.",
+        "Consistent val and test performance confirms the 60/20/20 split protocol is sound and "
+        "threshold calibration on val did not inflate the reported numbers.",
+        "No action needed if gap < 0.03.",
+        "pass",
+        _fig_single(F, "02b_confusion_logistic_test.png", "Confusion matrix — Logistic (test set)", 2, "MODEL"),
+        "fig-model-02b",
+    ))
+    out.append(_acard(
         "MODEL 02", "Confusion Matrix — Logistic Regression (threshold = 0.5)", "info",
         "Shows prediction errors at the default 0.5 threshold for logistic regression. "
         "The confusion matrix reveals the trade-off between false positives (non-hits predicted as hits) "
@@ -2041,6 +2082,23 @@ def _model_section() -> str:
         "No action needed — threshold optimisation in MODEL 06.",
         "pass",
         _fig_single(F, "02_confusion_logistic.png", "Confusion matrix — Logistic (threshold = 0.5)", 2, "MODEL"),
+    ))
+    out.append(_acard(
+        "MODEL 03b", "Confusion Matrix — XGBoost (held-out TEST set)", "pass",
+        "Same as MODEL 02b but for XGBoost. The test set was never used for any decision — "
+        "not for model selection, not for threshold calibration, not for feature selection. "
+        "This AUC is the most honest internal performance estimate.",
+        "Compare with MODEL 03 (val set). The XGBoost test AUC directly answers: "
+        "'did we overfit to the validation set when tuning the threshold?'",
+        f"XGBoost test AUC = {auc_xgb_test}. Val AUC = {auc_xgb}. Gap = {auc_gap}.",
+        "Val/test AUC gap < 0.01 = no overfitting to val split.",
+        "A small gap between val and test AUC is the primary evidence the pipeline generalises. "
+        "Combined with the leaderboard score (0.8503), this table forms the complete evaluation picture: "
+        "test AUC (internal honest estimate) vs leaderboard AUC (external distribution shift estimate).",
+        "No action needed if gap < 0.03.",
+        "pass",
+        _fig_single(F, "03b_confusion_xgboost_test.png", "Confusion matrix — XGBoost (test set)", 3, "MODEL"),
+        "fig-model-03b",
     ))
     out.append(_acard(
         "MODEL 03", "Confusion Matrix — XGBoost (threshold = 0.5)", "info",

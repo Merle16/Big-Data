@@ -116,6 +116,12 @@ def _load_feat_df(state: dict) -> pd.DataFrame:
 
 
 def _prep_splits(feat_df: pd.DataFrame, feat_cols: list):
+    """Three-way stratified split: 60% train / 20% val / 20% test.
+
+    - train : used for model fitting only
+    - val   : used for threshold calibration (Youden's J) and model selection
+    - test  : held completely out — only used to report final honest AUC
+    """
     if "label" not in feat_df.columns:
         raise ValueError("label column missing.")
     label_num = pd.to_numeric(feat_df["label"], errors="coerce")
@@ -124,17 +130,28 @@ def _prep_splits(feat_df: pd.DataFrame, feat_cols: list):
     for col in feat_cols:
         med = float(feat_df[col].median()) if feat_df[col].notna().sum() > 0 else 0.0
         feat_df[col] = feat_df[col].fillna(med)
-    train_idx, val_idx = train_test_split(
+
+    # Step 1: carve out 20% as held-out test (never used for any decision)
+    trainval_idx, test_idx = train_test_split(
         feat_df.index,
-        test_size=float(_CFG.get("global", {}).get("test_size", 0.20)),
+        test_size=0.20,
         random_state=SEED,
         stratify=feat_df["label"].astype(int),
     )
-    X_tr = feat_df.loc[train_idx, feat_cols]
-    X_vl = feat_df.loc[val_idx, feat_cols]
-    y_tr = feat_df.loc[train_idx, "label"].astype(int)
-    y_vl = feat_df.loc[val_idx, "label"].astype(int)
-    return feat_df, X_tr, X_vl, y_tr, y_vl, list(train_idx), list(val_idx)
+    # Step 2: split the remaining 80% into 75% train / 25% val → 60% / 20% overall
+    train_idx, val_idx = train_test_split(
+        trainval_idx,
+        test_size=0.25,
+        random_state=SEED,
+        stratify=feat_df.loc[trainval_idx, "label"].astype(int),
+    )
+    X_tr = feat_df.loc[train_idx,  feat_cols]
+    X_vl = feat_df.loc[val_idx,    feat_cols]
+    X_te = feat_df.loc[test_idx,   feat_cols]
+    y_tr = feat_df.loc[train_idx,  "label"].astype(int)
+    y_vl = feat_df.loc[val_idx,    "label"].astype(int)
+    y_te = feat_df.loc[test_idx,   "label"].astype(int)
+    return feat_df, X_tr, X_vl, X_te, y_tr, y_vl, y_te, list(train_idx), list(val_idx), list(test_idx)
 
 
 # ── threshold helpers ──────────────────────────────────────────────────────────
@@ -392,13 +409,15 @@ def run(state: dict) -> dict:
                  if c not in ("tconst", "label", "primaryTitle", "canonical_title")
                  and feat_df[c].notna().sum() > 0]
 
-    feat_df, X_tr, X_vl, y_tr, y_vl, train_idx, val_idx = _prep_splits(feat_df, feat_cols)
-    y_val_np = y_vl.to_numpy()
+    feat_df, X_tr, X_vl, X_te, y_tr, y_vl, y_te, train_idx, val_idx, test_idx = _prep_splits(feat_df, feat_cols)
+    y_val_np  = y_vl.to_numpy()
+    y_test_np = y_te.to_numpy()
 
     # ── scale for logistic ─────────────────────────────────────────────────────
     scaler = StandardScaler()
     train_Xs = scaler.fit_transform(X_tr)
     val_Xs   = scaler.transform(X_vl)
+    test_Xs  = scaler.transform(X_te)
 
     # ── logistic regression ────────────────────────────────────────────────────
     print("[m1_train] Fitting logistic regression...")
@@ -409,12 +428,16 @@ def run(state: dict) -> dict:
         random_state=SEED,
     )
     log_model.fit(train_Xs, y_tr)
-    log_probs = log_model.predict_proba(val_Xs)[:, 1]
-    log_auc   = float(roc_auc_score(y_vl, log_probs))
-    log_acc   = float(accuracy_score(y_vl, (log_probs >= 0.5).astype(int)))
+    log_probs      = log_model.predict_proba(val_Xs)[:, 1]
+    log_probs_test = log_model.predict_proba(test_Xs)[:, 1]
+    log_auc        = float(roc_auc_score(y_vl, log_probs))
+    log_auc_test   = float(roc_auc_score(y_te, log_probs_test))
+    log_acc        = float(accuracy_score(y_vl, (log_probs >= 0.5).astype(int)))
+    log_acc_test   = float(accuracy_score(y_te, (log_probs_test >= 0.5).astype(int)))
 
     # ── xgboost ────────────────────────────────────────────────────────────────
-    xgb_model = None; xgb_probs = None; xgb_auc = None; xgb_acc = None
+    xgb_model = None; xgb_probs = None; xgb_probs_test = None
+    xgb_auc = None; xgb_auc_test = None; xgb_acc = None; xgb_acc_test = None
     if HAS_XGB:
         print("[m1_train] Fitting XGBoost...")
         _xcfg     = _CFG.get("models", {}).get("xgboost", {})
@@ -428,9 +451,12 @@ def run(state: dict) -> dict:
             tree_method="hist", n_jobs=4, random_state=SEED, verbosity=0,
         )
         xgb_model.fit(X_tr, y_tr, verbose=False)
-        xgb_probs = xgb_model.predict_proba(X_vl)[:, 1]
-        xgb_auc   = float(roc_auc_score(y_vl, xgb_probs))
-        xgb_acc   = float(accuracy_score(y_vl, (xgb_probs >= 0.5).astype(int)))
+        xgb_probs      = xgb_model.predict_proba(X_vl)[:, 1]
+        xgb_probs_test = xgb_model.predict_proba(X_te)[:, 1]
+        xgb_auc        = float(roc_auc_score(y_vl, xgb_probs))
+        xgb_auc_test   = float(roc_auc_score(y_te, xgb_probs_test))
+        xgb_acc        = float(accuracy_score(y_vl, (xgb_probs >= 0.5).astype(int)))
+        xgb_acc_test   = float(accuracy_score(y_te, (xgb_probs_test >= 0.5).astype(int)))
 
     # ── threshold analysis ─────────────────────────────────────────────────────
     log_thr_youden, log_youden_j = _youden_threshold(y_val_np, log_probs)
@@ -449,13 +475,21 @@ def run(state: dict) -> dict:
     # ── figures ────────────────────────────────────────────────────────────────
     print("[m1_train] Saving figures...")
     _fig_roc(log_probs, xgb_probs, y_val_np)
+    # Val confusion (threshold calibrated here via Youden's J)
     _fig_confusion(log_probs, y_val_np,
-                   title=f"Logistic  AUC={log_auc:.4f}",
+                   title=f"Logistic — val  AUC={log_auc:.4f}",
                    fname="02_confusion_logistic.png")
+    # Test confusion (held-out — no decisions made on this set)
+    _fig_confusion(log_probs_test, y_test_np,
+                   title=f"Logistic — test  AUC={log_auc_test:.4f}",
+                   fname="02b_confusion_logistic_test.png")
     if xgb_probs is not None:
         _fig_confusion(xgb_probs, y_val_np,
-                       title=f"XGBoost  AUC={xgb_auc:.4f}",
+                       title=f"XGBoost — val  AUC={xgb_auc:.4f}",
                        fname="03_confusion_xgboost.png")
+        _fig_confusion(xgb_probs_test, y_test_np,
+                       title=f"XGBoost — test  AUC={xgb_auc_test:.4f}",
+                       fname="03b_confusion_xgboost_test.png")
     _fig_model_comparison(log_auc, xgb_auc, log_acc, xgb_acc)
     _fig_score_dist(log_probs, xgb_probs, y_val_np)
     _fig_threshold_sweep(y_val_np, log_probs, "Logistic", log_thr_youden,
@@ -487,6 +521,7 @@ def run(state: dict) -> dict:
     model_results = pd.DataFrame([{
         "model": "logistic",
         "validation_auc": log_auc, "validation_accuracy": log_acc,
+        "test_auc": log_auc_test,  "test_accuracy": log_acc_test,
         "threshold_fixed": 0.5, "threshold_youden": log_thr_youden,
         "accuracy_youden": log_m_youden["accuracy"],
         "f1_fixed": log_m_05["f1"], "f1_youden": log_m_youden["f1"],
@@ -496,6 +531,7 @@ def run(state: dict) -> dict:
         model_results = pd.concat([model_results, pd.DataFrame([{
             "model": "xgboost",
             "validation_auc": xgb_auc, "validation_accuracy": xgb_acc,
+            "test_auc": xgb_auc_test,  "test_accuracy": xgb_acc_test,
             "threshold_fixed": 0.5, "threshold_youden": xgb_thr_youden,
             "accuracy_youden": None if xgb_m_youden is None else xgb_m_youden["accuracy"],
             "f1_fixed":   None if xgb_m_05    is None else xgb_m_05["f1"],
@@ -522,6 +558,7 @@ def run(state: dict) -> dict:
             },
             "train_idx": train_idx,
             "val_idx":   val_idx,
+            "test_idx":  test_idx,
         }, f)
 
     # ── update state ───────────────────────────────────────────────────────────
@@ -534,11 +571,15 @@ def run(state: dict) -> dict:
         "threshold_analysis": threshold_df,
         "train_idx":          train_idx,
         "val_idx":            val_idx,
+        "test_idx":           test_idx,
         "log_auc":            log_auc,
         "xgb_auc":            xgb_auc,
+        "log_auc_test":       log_auc_test,
+        "xgb_auc_test":       xgb_auc_test,
     })
 
-    print(f"[m1_train] Logistic AUC={log_auc:.4f}  XGB AUC={xgb_auc}  Best={best}")
+    print(f"[m1_train] Logistic  val AUC={log_auc:.4f}  test AUC={log_auc_test:.4f}")
+    print(f"[m1_train] XGBoost   val AUC={xgb_auc:.4f}  test AUC={xgb_auc_test:.4f}  Best={best}")
     print(f"[m1_train] Figures saved to {MODEL_FIG_DIR}")
     print(f"[m1_train] Artifacts saved to {OUT_MODELS}")
     return state
