@@ -379,13 +379,16 @@ Evidence for MNAR classification is in `pipeline/outputs/enrichment_rt_oscar/rt_
 
 ## Current model results
 
-| Configuration | Val AUC | Test AUC | Keep-set features |
-|---|---|---|---|
-| Base (no graph) | 0.8967 | — | 21 |
-| + PageRank (--pagerank) | 0.9067 | — | 22 |
-| **+ Tuned XGBoost, title_sim removed** | **0.9538** | **0.9647** | **44** |
+The primary metric is **temporal holdout AUC** — trained on pre-2013 films, evaluated on unseen post-2013 films. This is the honest out-of-distribution estimate. Internal pipeline AUC (random 70/20/10 split) is inflated by same-pool OOF effect and listed for reference only.
 
-The final model uses XGBoost (n_estimators=300, max_depth=3, lr=0.1, subsample=0.9, colsample=0.85). Logistic regression baseline: val AUC 0.938 / test AUC 0.954. The `title_sim` features (TF-IDF cosine similarity to hit/non-hit centroids) were removed after ablation confirmed they hurt temporal holdout AUC by −0.020 — they captured era-specific title patterns, not quality signals.
+| Configuration | Temporal holdout AUC | Internal val AUC (inflated) | Features |
+|---|---|---|---|
+| Base (no graph) | — | 0.8967 | 21 |
+| + PageRank (--pagerank) | — | 0.9067 | 22 |
+| + Tuned XGBoost, title_sim removed | **0.9073** | 0.9538 ⚠ inflated | 43 |
+| Logistic regression baseline | — | 0.9382 ⚠ inflated | 43 |
+
+The final model uses XGBoost (n_estimators=300, max_depth=3, lr=0.1, subsample=0.9, colsample=0.85). The `title_sim` features were removed after ablation confirmed they hurt temporal holdout AUC by −0.020 — they captured era-specific title patterns, not quality signals.
 
 AUC progression by phase: IMDb baseline → genre enrichment → RT/Oscar enrichment → PageRank graph features. Each phase is additive and opt-in.
 
@@ -432,4 +435,4 @@ python pipeline/run.py --genre --rt-oscar --pagerank
 | + Temporal holdout Youden threshold | 535 / 955 | 0.8482 |
 | + Tuned hyperparameters (40 trials) | 513 / 955 | 0.8503 |
 | + RT/Oscar features, decade one-hot | 521 / 955 | 0.8712 |
-| **+ Removed title_sim (ablation)** | **521 / 955** | **0.9775** |
+| **+ Removed title_sim (ablation)** | **521 / 955** | **0.8775** |
