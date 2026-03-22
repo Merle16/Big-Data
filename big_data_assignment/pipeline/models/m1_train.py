@@ -116,10 +116,10 @@ def _load_feat_df(state: dict) -> pd.DataFrame:
 
 
 def _prep_splits(feat_df: pd.DataFrame, feat_cols: list):
-    """Three-way stratified split: 60% train / 20% val / 20% test.
+    """Three-way stratified split: 70% train / 20% val / 10% test.
 
     - train : used for model fitting only
-    - val   : used for threshold calibration (Youden's J) and model selection
+    - val   : used for hyperparameter search, threshold calibration, model selection
     - test  : held completely out — only used to report final honest AUC
     """
     if "label" not in feat_df.columns:
@@ -131,17 +131,17 @@ def _prep_splits(feat_df: pd.DataFrame, feat_cols: list):
         med = float(feat_df[col].median()) if feat_df[col].notna().sum() > 0 else 0.0
         feat_df[col] = feat_df[col].fillna(med)
 
-    # Step 1: carve out 20% as held-out test (never used for any decision)
+    # Step 1: carve out 10% as held-out test (never used for any decision)
     trainval_idx, test_idx = train_test_split(
         feat_df.index,
-        test_size=0.20,
+        test_size=0.10,
         random_state=SEED,
         stratify=feat_df["label"].astype(int),
     )
-    # Step 2: split the remaining 80% into 75% train / 25% val → 60% / 20% overall
+    # Step 2: split remaining 90% into 77.8% train / 22.2% val → 70% / 20% overall
     train_idx, val_idx = train_test_split(
         trainval_idx,
-        test_size=0.25,
+        test_size=0.222,
         random_state=SEED,
         stratify=feat_df.loc[trainval_idx, "label"].astype(int),
     )

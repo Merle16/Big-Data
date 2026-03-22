@@ -2005,7 +2005,7 @@ def _model_section() -> str:
         '<p class="section-objective">'
         'Two classifiers are trained on the feature matrix: L2-regularised logistic regression '
         '(interpretable baseline) and XGBoost (primary model). '
-        'Evaluation uses a <strong>60 / 20 / 20 stratified split</strong>: '
+        'Evaluation uses a <strong>70 / 20 / 10 stratified split</strong>: '
         'train (model fitting) · val (threshold calibration, model selection) · test (held-out, final honest estimate). '
         'A diagnostic pass computes permutation importance and SHAP values. '
         'An ablation study determines the minimum keep-set that preserves full-model AUC. '
@@ -2071,7 +2071,7 @@ def _model_section() -> str:
         "A large difference in off-diagonal cells indicates the threshold or model overfit to val.",
         f"Logistic test AUC = {auc_log_test}. Compare with val AUC = {auc_logistic}.",
         "Val/test AUC gap < 0.01 = no overfitting. Gap 0.01–0.03 = mild. Gap > 0.03 = investigate.",
-        "Consistent val and test performance confirms the 60/20/20 split protocol is sound and "
+        "Consistent val and test performance confirms the 70/20/10 split protocol is sound and "
         "threshold calibration on val did not inflate the reported numbers.",
         "No action needed if gap < 0.03.",
         "pass",
